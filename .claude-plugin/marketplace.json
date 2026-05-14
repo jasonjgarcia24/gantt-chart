@@ -1,0 +1,19 @@
+{
+  "name": "jason-gantt",
+  "owner": {
+    "name": "Jason J. Garcia"
+  },
+  "metadata": {
+    "description": "A Claude Code plugin for managing program plans as Gantt charts in Google Sheets — CLI does the dependency math (topological sort, working-days arithmetic, critical path); Sheet is the artifact PMs share."
+  },
+  "plugins": [
+    {
+      "name": "gantt",
+      "source": {
+        "source": "github",
+        "repo": "jasonjgarcia24/gantt-chart"
+      },
+      "description": "Python CLI + Claude skill for Gantt-chart program plans in Google Sheets. Cascades dates from predecessors (FS/SS/FF/SF + lag), auto-derives task status, computes critical path, sorts rows by WBS id. NL routing skill maps prompts like 'OK2DC is 50% done' or 'pull task 5 in by 3 days' to CLI calls."
+    }
+  ]
+}

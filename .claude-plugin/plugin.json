@@ -1,0 +1,13 @@
+{
+  "name": "gantt",
+  "description": "Operate program portfolio plans in Google Sheets via the `gantt` CLI — task CRUD, dependency cascade (FS/SS/FF/SF + lag), auto-status, critical path, WBS row sort, and an NL-routing skill for natural-language requests like 'shift the launch milestone out 2 weeks' or 'OK2DC is now 50% done'.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Jason J. Garcia"
+  },
+  "homepage": "https://github.com/jasonjgarcia24/gantt-chart",
+  "repository": "https://github.com/jasonjgarcia24/gantt-chart",
+  "license": "MIT",
+  "commands": "./commands",
+  "skills": "./skills"
+}
