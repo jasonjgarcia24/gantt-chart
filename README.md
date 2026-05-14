@@ -17,11 +17,11 @@ Modeled on the `daily-ops` bundle pattern: bundle-local venv, user state under
 | 1. Foundation | `setup`, `bootstrap`, `info` | ✅ shipped |
 | 2. Domain logic | model, DSL parser, working-days math, cascade engine | ✅ shipped |
 | 3. First user-visible program | `program new`, `task add/update/delete` | ✅ shipped |
-| 4. Cascade wiring | `recalc` (reads tab, cascades, writes back) | ⬜ next |
-| 5. Critical path + shift | `critical-path`, `shift` | ⬜ |
-| 6. Skill surface | `SKILL.md`, `/gantt` slash command | ⬜ |
+| 4. Cascade wiring | `recalc` (reads tab, cascades, writes back) | ✅ shipped |
+| 5. Critical path + shift | `critical-path`, `shift` | ✅ shipped |
+| 6. Skill surface | `SKILL.md`, `/gantt` slash command | ✅ shipped (activate via the symlinks below) |
 
-Test suite: 126 tests (model, dsl, dates, cascade, refs, schema).
+Test suite: 179 tests across `model`, `dsl`, `dates`, `cascade`, `refs`, `schema`, `sheets_helpers`, `auto_status`, `critical_path`.
 
 See `docs/ideas/gantt-skill-v0.5.md` for the v0.5 charter and `docs/plans/v0.5-backlog.md`
 for the full task breakdown.
@@ -39,6 +39,15 @@ for the full task breakdown.
 # → opens a browser for OAuth consent
 # → creates "Jason — Program Portfolio" with a seeded _Config tab
 # → saves sheet_id + URL to ~/.config/gantt/config.json
+
+# 3. (Optional but recommended) Symlink the CLI onto PATH so you can run
+# bare `gantt …` from anywhere instead of `./gantt …`.
+ln -s ~/Documents/gantt-chart/gantt ~/.local/bin/gantt
+
+# 4. (Optional) Activate the SKILL + slash command for Claude. Until the
+# claude-tool manifest ships, this is a manual symlink:
+ln -s ~/Documents/gantt-chart/SKILL.md          ~/.claude/skills/gantt/SKILL.md
+ln -s ~/Documents/gantt-chart/commands/gantt.md ~/.claude/commands/gantt.md
 ```
 
 After bootstrap, `gantt info` reports the sheet URL, OAuth state, and venv status.
@@ -108,6 +117,26 @@ WBS ids auto-assign:
 # Delete refuses if any other task lists the target as a predecessor.
 ```
 
+`task add` and `task update` auto-cascade — they print a second result line summarising the recalc that follows the mutation.
+
+### Recalc, shift, critical-path
+
+```bash
+./gantt recalc TPM90
+# Reads the tab, runs cascade + auto-status, sorts rows by WBS id, refreshes
+# row groups, batch-writes the diff. Idempotent. Print line includes counts:
+# "N dates shifted, M statuses updated, K names re-indented, P rows reordered".
+
+./gantt shift TPM90 1.2 +5d
+# Shift task 1.2 by 5 working days (anchors via manual Start if no preds,
+# else by adding lag to the first predecessor). Auto-cascades.
+./gantt shift TPM90 1.2 -- -2d
+# Negative deltas need the `--` separator (argparse).
+
+./gantt critical-path TPM90
+# CPM forward+backward pass; bolds critical-path rows; prints the chain.
+```
+
 ### Predecessor DSL
 
 Compact form: `<id><relation><signed_lag>?`, comma-separated.
@@ -133,12 +162,17 @@ gantt-chart/
 ├── pyproject.toml              # pytest config
 ├── README.md
 ├── .gitignore
+├── SKILL.md                    # Claude skill — natural-language → CLI routing
+├── commands/
+│   └── gantt.md                # /gantt slash command
 ├── gantt_lib/                  # pure-Python domain logic + Sheets I/O wrapper
-│   ├── model.py                # Task, Program, Status, next_wbs_id
-│   ├── dsl.py                  # predecessor DSL parser
+│   ├── model.py                # Task, Program, Status, next_wbs_id, wbs_sort_key
+│   ├── dsl.py                  # predecessor DSL parser + formatter
 │   ├── dates.py                # add_working_days, working_days_between
 │   ├── cascade.py              # topo sort + dependency cascade
 │   ├── refs.py                 # predecessor-graph utilities (used by delete)
+│   ├── auto_status.py          # derive Status from %complete + dates + preds
+│   ├── critical_path.py        # CPM forward+backward, slack, critical path
 │   ├── schema.py               # column layout, ARRAYFORMULA, CF/DV/border requests
 │   └── sheets.py               # thin gspread wrapper for program tabs
 ├── tests/
@@ -148,6 +182,9 @@ gantt-chart/
 │   ├── test_cascade.py
 │   ├── test_refs.py
 │   ├── test_schema.py
+│   ├── test_sheets_helpers.py
+│   ├── test_auto_status.py
+│   ├── test_critical_path.py
 │   └── fixtures/programs.py    # shared Program factories
 └── docs/
     ├── ideas/gantt-skill-v0.5.md
@@ -159,7 +196,7 @@ gantt-chart/
 ## Development
 
 ```bash
-# Run the full suite (currently 126 tests):
+# Run the full suite (currently 179 tests):
 .venv/bin/python3 -m pytest tests/ -v
 
 # One module:
@@ -214,6 +251,22 @@ gspread.
   based on the data row's Team value and a date-range check against
   Start/End. This decouples bar rendering from cell content and lets the
   team-color CF rules be the source of truth for visualization.
+
+### Adopted during T10–T13 iteration
+- **Auto-cascade on every mutation.** `task add`, `task update`, and `shift`
+  invoke the recalc pipeline immediately, so dates / status / row order are
+  always consistent without a separate `recalc` step. Single-step UX.
+- **Auto-derived Status.** Recalc computes Status from `%complete` + start
+  date + predecessor completion (Done / Not Started / Blocked / In Progress).
+  Manually-set "At Risk" is overwritten — flag here if you want a carve-out.
+- **WBS row sort.** Recalc detects when sheet rows aren't in WBS order and
+  rewrites the entire task region in sorted order so children sit directly
+  beneath their parents. Never renames ids (would break predecessor refs).
+- **Row grouping.** Recalc adds Sheets native row dimension groups so L2/L3
+  children become collapsible under their L1 parents.
+- **Tree-style indent on Name (col C).** L1 = no prefix, L2 = `-- `,
+  L3 = `---- `, etc. Stripped on read; re-applied on every write; backfilled
+  on recalc when the displayed name doesn't match the level-derived form.
 
 ---
 
