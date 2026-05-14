@@ -44,13 +44,25 @@ def read_program_tasks(ws) -> list[Task]:
     checkbox to col L causes Sheets to populate every cell with "FALSE",
     so a "row has any non-empty cell" check would never skip anything.
     """
+    return [task for task, _row, _raw in read_program_tasks_with_rows(ws)]
+
+
+def read_program_tasks_with_rows(ws) -> list[tuple[Task, int, list[str]]]:
+    """Same as read_program_tasks but pairs each task with its 1-based row number
+    and the raw cell values for that row.
+
+    The raw row lets cmd_recalc compare the displayed col C (which may have
+    leading-space indentation already applied — or not, for tasks added before
+    the indent feature shipped) against the expected indented form, and only
+    write when they differ.
+    """
     last_col = schema.col_letter(schema.NUM_DATA_COLS)
     rng = ws.get_values(f"A{FIRST_DATA_ROW}:{last_col}")
-    out: list[Task] = []
-    for row in rng:
+    out: list[tuple[Task, int, list[str]]] = []
+    for offset, row in enumerate(rng):
         if not row or not row[0].strip():
             continue
-        out.append(Task.from_row(row))
+        out.append((Task.from_row(row), FIRST_DATA_ROW + offset, list(row)))
     return out
 
 

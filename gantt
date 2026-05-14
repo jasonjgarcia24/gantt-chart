@@ -531,6 +531,139 @@ def cmd_task_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_recalc(args: argparse.Namespace) -> int:
+    from datetime import date as _date
+    from gantt_lib import schema, sheets as gs_sheets
+    from gantt_lib.auto_status import compute_status
+    from gantt_lib.cascade import (
+        CycleError,
+        MissingPredecessorError,
+        UnanchoredError,
+        cascade,
+    )
+    from gantt_lib.model import Program
+
+    ss, ws = _open_program_tab(args)
+    config_ws = ss.worksheet("_Config")
+    holidays = schema.read_holidays_from_config(config_ws)
+
+    pairs = gs_sheets.read_program_tasks_with_rows(ws)
+    if not pairs:
+        ok(f"recalc {args.program} — no tasks (nothing to do)")
+        return 0
+
+    tasks = [t for t, _row, _raw in pairs]
+    row_by_id = {t.id: row for t, row, _raw in pairs}
+    raw_name_by_id = {t.id: (raw[2] if len(raw) > 2 else "") for t, _row, raw in pairs}
+    old_dates = {t.id: (t.start, t.end) for t in tasks}
+    old_status = {t.id: t.status for t in tasks}
+
+    program = Program(name=args.program, tasks=tasks, holidays=holidays)
+    try:
+        cascade(program)
+    except CycleError as e:
+        die(f"recalc {args.program} — {e}")
+    except UnanchoredError as e:
+        die(f"recalc {args.program} — {e}")
+    except MissingPredecessorError as e:
+        die(f"recalc {args.program} — {e}")
+
+    # Auto-derive status from %complete + dates + predecessor completion.
+    today = _date.today()
+    tasks_by_id = {t.id: t for t in tasks}
+    for t in tasks:
+        t.status = compute_status(t, tasks_by_id, today)
+
+    # Compute the diff: dates / statuses / names that changed, and the largest date shift.
+    date_changed_ids = set()
+    status_changed_ids = set()
+    name_changed_ids = set()
+    max_shift = 0
+    for t in tasks:
+        old_s, old_e = old_dates[t.id]
+        if t.start != old_s or t.end != old_e:
+            date_changed_ids.add(t.id)
+            if old_s is not None and t.start is not None:
+                shift = (t.start - old_s).days
+                if abs(shift) > abs(max_shift):
+                    max_shift = shift
+        if t.status != old_status[t.id]:
+            status_changed_ids.add(t.id)
+        # Backfill indentation: re-write col C if the displayed name doesn't
+        # match the expected level-derived indent (handles tasks added before
+        # the indent feature shipped, or whose level changed).
+        expected_name = (
+            gs_sheets.indent_prefix(t.level) + t.name
+        )
+        if raw_name_by_id[t.id] != expected_name:
+            name_changed_ids.add(t.id)
+
+    # Batch-write only what changed: Name (C), Start/End (F:G), Status (J).
+    updates = []
+    for t in tasks:
+        row = row_by_id.get(t.id)
+        if row is None:
+            continue
+        if t.id in name_changed_ids:
+            indented = gs_sheets.indent_prefix(t.level) + t.name
+            updates.append({
+                "range": f"C{row}",
+                "values": [[indented]],
+            })
+        if t.id in date_changed_ids:
+            start_str = t.start.isoformat() if t.start else ""
+            end_str = t.end.isoformat() if t.end else ""
+            updates.append({
+                "range": f"F{row}:G{row}",
+                "values": [[start_str, end_str]],
+            })
+        if t.id in status_changed_ids:
+            updates.append({
+                "range": f"J{row}",
+                "values": [[t.status]],
+            })
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+    # Reset row grouping based on current WBS structure. Wipe existing groups
+    # then add a fresh set computed from the in-memory tasks. Each call to
+    # deleteDimensionGroup removes one depth level — and Sheets returns one
+    # rowGroups entry per depth level, so deleting them all wipes the tree.
+    metadata = ss.fetch_sheet_metadata(params={"includeGridData": False})
+    target_sheet = next(
+        s for s in metadata["sheets"] if s["properties"]["sheetId"] == ws.id
+    )
+    existing_row_groups = target_sheet.get("rowGroups", [])
+    new_row_groups = gs_sheets.compute_row_groups(
+        [(t, row) for t, row, _raw in pairs]
+    )
+
+    group_requests = []
+    for g in existing_row_groups:
+        rng = g["range"]
+        group_requests.append(schema.delete_row_group_request(
+            ws.id, rng["startIndex"], rng["endIndex"],
+        ))
+    for start, end in new_row_groups:
+        group_requests.append(schema.add_row_group_request(ws.id, start, end))
+    if group_requests:
+        ss.batch_update({"requests": group_requests})
+
+    # Result line.
+    latest_end = max((t.end for t in tasks if t.end), default=None)
+    parts = [f"{len(date_changed_ids)} dates shifted"]
+    if status_changed_ids:
+        parts.append(f"{len(status_changed_ids)} statuses updated")
+    if name_changed_ids:
+        parts.append(f"{len(name_changed_ids)} names re-indented")
+    if max_shift != 0:
+        parts.append(f"max {max_shift:+d}d")
+    if latest_end:
+        parts.append(f"end {latest_end.isoformat()}")
+    ok(f"recalc {args.program} — " + ", ".join(parts))
+    return 0
+
+
 def cmd_task_delete(args: argparse.Namespace) -> int:
     from gantt_lib import sheets as gs_sheets
     from gantt_lib.refs import referencing_tasks
@@ -674,6 +807,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_td.add_argument("program")
     p_td.add_argument("id")
     p_td.set_defaults(func=cmd_task_delete)
+
+    p_recalc = sub.add_parser(
+        "recalc",
+        help="recompute Start/End for all tasks via dependency cascade",
+    )
+    p_recalc.add_argument("program", help="program short name")
+    p_recalc.set_defaults(func=cmd_recalc)
 
     return parser
 
