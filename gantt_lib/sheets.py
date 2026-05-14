@@ -113,6 +113,50 @@ def update_task_data(ws, row: int, task: Task) -> None:
     )
 
 
+def find_child_insertion_row(pairs: list[tuple[Task, int, list[str]]],
+                              parent_id: str) -> Optional[int]:
+    """1-based row where a new child of `parent_id` should be inserted.
+
+    Inserts after the parent's last existing direct/indirect descendant so
+    children stay contiguous beneath their parent in WBS order. Returns None
+    if `parent_id` is not in `pairs`.
+
+    Caveat: assumes existing children are already contiguous after the parent.
+    If a parent's children were added out of order and live in scattered rows,
+    the insertion lands after only the contiguous descendant block; scattered
+    siblings remain where they are.
+    """
+    parent_idx = None
+    parent_level = None
+    for i, (t, _r, _raw) in enumerate(pairs):
+        if t.id == parent_id:
+            parent_idx = i
+            parent_level = t.level
+            break
+    if parent_idx is None:
+        return None
+    insertion_row = pairs[parent_idx][1] + 1
+    for i in range(parent_idx + 1, len(pairs)):
+        t, r, _raw = pairs[i]
+        if t.level > parent_level:
+            insertion_row = r + 1
+        else:
+            break
+    return insertion_row
+
+
+def insert_task_at_row(ws, task: Task, row: int) -> int:
+    """Insert a row at the given 1-based position with the task's data.
+
+    Shifts existing rows below down. The timeline ARRAYFORMULA at N{FIRST_TASK_ROW}
+    auto-extends its range when rows are inserted, so the new row gets bars
+    rendered without extra writes.
+    """
+    indented = _indented_row(task)
+    ws.insert_row(indented, index=row, value_input_option="USER_ENTERED")
+    return row
+
+
 def compute_row_groups(tasks_with_rows: list[tuple[Task, int]]) -> list[tuple[int, int]]:
     """Compute (start_row, end_row_exclusive) ranges for each WBS-anchor with descendants.
 

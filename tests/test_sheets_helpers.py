@@ -6,7 +6,12 @@ exercised end-to-end by `gantt program new`, `gantt task add`, etc.
 from __future__ import annotations
 
 from gantt_lib.model import Task
-from gantt_lib.sheets import _indented_row, compute_row_groups, indent_prefix
+from gantt_lib.sheets import (
+    _indented_row,
+    compute_row_groups,
+    find_child_insertion_row,
+    indent_prefix,
+)
 
 
 def _t(id, level=1, name="task"):
@@ -108,3 +113,55 @@ def test_two_separate_groups_under_two_anchors():
     assert (4, 5) in groups   # 1's child at row 5 (0-based: 4-5 exclusive)
     assert (6, 8) in groups   # 2's children at rows 7-8 (0-based: 6-8 exclusive)
     assert len(groups) == 2
+
+
+# ---------- find_child_insertion_row ----------
+# Helper: pairs use 3-tuples (Task, row, raw_row); raw_row unused here.
+
+def _p(id, row, level=1):
+    return (_t(id, level=level), row, [])
+
+
+def test_insertion_row_under_parent_with_no_children():
+    pairs = [_p("1", 5), _p("2", 6)]
+    # New child of 1 inserts directly after parent.
+    assert find_child_insertion_row(pairs, "1") == 6
+
+
+def test_insertion_row_after_last_existing_child():
+    pairs = [
+        _p("1", 5, level=1),
+        _p("1.1", 6, level=2),
+        _p("1.2", 7, level=2),
+        _p("2", 8, level=1),
+    ]
+    # New child of 1 inserts after last child (1.2 at row 7).
+    assert find_child_insertion_row(pairs, "1") == 8
+
+
+def test_insertion_row_skips_grandchildren():
+    pairs = [
+        _p("1", 5, level=1),
+        _p("1.1", 6, level=2),
+        _p("1.1.1", 7, level=3),
+        _p("1.2", 8, level=2),
+        _p("2", 9, level=1),
+    ]
+    # New child of 1 lands after the whole subtree (rows 6-8).
+    assert find_child_insertion_row(pairs, "1") == 9
+    # New child of 1.1 lands after grandchild 1.1.1 only.
+    assert find_child_insertion_row(pairs, "1.1") == 8
+
+
+def test_insertion_row_for_deep_parent():
+    pairs = [
+        _p("1", 5, level=1),
+        _p("1.1", 6, level=2),
+        _p("1.1.1", 7, level=3),
+    ]
+    assert find_child_insertion_row(pairs, "1.1.1") == 8
+
+
+def test_insertion_row_returns_none_for_missing_parent():
+    pairs = [_p("1", 5)]
+    assert find_child_insertion_row(pairs, "99") is None

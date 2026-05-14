@@ -496,7 +496,8 @@ def cmd_task_add(args: argparse.Namespace) -> int:
 
     ss, ws = _open_program_tab(args)
 
-    existing = gs_sheets.read_program_tasks(ws)
+    pairs = gs_sheets.read_program_tasks_with_rows(ws)
+    existing = [t for t, _r, _raw in pairs]
     new_id = next_wbs_id(existing, parent=args.parent)
 
     task = Task(
@@ -506,7 +507,13 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     )
     _apply_field_args(task, args)
 
-    row = gs_sheets.append_task(ws, task)
+    if args.parent:
+        insertion_row = gs_sheets.find_child_insertion_row(pairs, args.parent)
+        if insertion_row is None:
+            die(f"task {args.program} — parent {args.parent!r} not found")
+        row = gs_sheets.insert_task_at_row(ws, task, insertion_row)
+    else:
+        row = gs_sheets.append_task(ws, task)
     ok(f"task {args.program}/{new_id} added — row {row}")
     return 0
 
