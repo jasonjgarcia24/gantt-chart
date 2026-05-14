@@ -736,7 +736,6 @@ def cmd_recalc(args: argparse.Namespace) -> int:
         return 0
     ok(_format_recalc_line(args.program, summary))
     return 0
-    return 0
 
 
 def _parse_shift_delta(s: str) -> int:
