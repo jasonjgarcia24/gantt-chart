@@ -13,4 +13,4 @@ as-is at the top of your response. For mutations, two result lines will be
 emitted (the mutation + the auto-recalc summary) — surface both.
 
 If the user describes a task by name and the WBS id is ambiguous, ask once.
-Never guess. Skill details live in `SKILL.md` at the project root.
+Never guess. Skill details live in `skills/gantt/SKILL.md`.
