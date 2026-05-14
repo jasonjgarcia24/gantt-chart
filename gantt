@@ -1,0 +1,688 @@
+#!/usr/bin/env python3
+"""gantt — program plan CLI backed by Google Sheets.
+
+Tabs (per workbook): _Config, _People, _Portfolio, P_<name> (one per program).
+
+Self-contained:
+  Venv:          tools/gantt/.venv/                (created by `gantt setup`)
+  OAuth client:  ~/.config/gantt/credentials.json  (override: $GANTT_CREDS)
+  User token:    ~/.config/gantt/token.json        (refresh token after consent)
+  Sheet config:  ~/.config/gantt/config.json       (sheet_id + url after bootstrap)
+
+First-run workflow:
+  1. gantt setup       # create bundle-local venv + install deps
+  2. gantt bootstrap   # OAuth browser consent + create Google Sheet
+  3. gantt program new <name> ; gantt task add ...
+
+On first bootstrap, if ~/.config/gantt/credentials.json is missing, gantt
+will one-time seed it by copying from ~/Documents/ai-project-model/credentials.json
+when that file exists. After seeding, gantt never touches ai-project-model.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+BUNDLE_DIR = Path(os.path.realpath(__file__)).parent
+VENV_DIR = BUNDLE_DIR / ".venv"
+VENV_PY = VENV_DIR / "bin/python3"
+VENV_PIP = VENV_DIR / "bin/pip"
+REQ_FILE = BUNDLE_DIR / "requirements.txt"
+CONFIG_DIR = Path.home() / ".config/gantt"
+CONFIG_PATH = CONFIG_DIR / "config.json"
+TOKEN_PATH = CONFIG_DIR / "token.json"
+CREDS_PATH = CONFIG_DIR / "credentials.json"
+SEED_CREDS_PATH = Path.home() / "Documents/ai-project-model/credentials.json"
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.file",
+]
+SHEET_TITLE = "Jason — Program Portfolio"
+
+# --- venv self-exec trampoline ------------------------------------------------
+# If a bundle-local venv exists and we're not already running under it, re-exec
+# under the venv's python. Lets the bundle stay self-contained under PEP 668
+# (externally-managed system Python). Skipped for `setup` so we can create/rebuild
+# the venv from the system interpreter.
+#
+# Critical: we check sys.prefix (not sys.executable) because Ubuntu's python3-venv
+# creates .venv/bin/python3 as a symlink to the system interpreter. Resolving the
+# two paths yields the same file, so comparing executables falsely returns "already
+# in venv". sys.prefix, by contrast, is set to the venv directory by pyvenv.cfg
+# regardless of symlink layout.
+_SKIP_TRAMPOLINE = len(sys.argv) > 1 and sys.argv[1] == "setup"
+if (
+    not _SKIP_TRAMPOLINE
+    and VENV_PY.exists()
+    and Path(sys.prefix).resolve() != VENV_DIR.resolve()
+):
+    os.execv(str(VENV_PY), [str(VENV_PY), *sys.argv])
+# ------------------------------------------------------------------------------
+
+
+# ---------- utilities ----------
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"gantt: error: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def ok(line: str) -> None:
+    print(f"gantt: {line} ✓")
+
+
+def todo(subcommand: str) -> int:
+    print(f"gantt: {subcommand} — not implemented yet")
+    return 0
+
+
+def read_config() -> dict:
+    if not CONFIG_PATH.exists():
+        return {}
+    with open(CONFIG_PATH) as fh:
+        return json.load(fh)
+
+
+def write_config(cfg: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_PATH, "w") as fh:
+        json.dump(cfg, fh, indent=2)
+    os.chmod(CONFIG_PATH, 0o600)
+
+
+# ---------- auth ----------
+
+def get_credentials():
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
+    except ImportError:
+        die("gantt dependencies not installed. Run: gantt setup")
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    creds_path = Path(os.environ.get("GANTT_CREDS", CREDS_PATH))
+
+    # One-time seed from ai-project-model on first run, then never touched.
+    if not creds_path.exists() and creds_path == CREDS_PATH and SEED_CREDS_PATH.exists():
+        shutil.copy2(SEED_CREDS_PATH, CREDS_PATH)
+        os.chmod(CREDS_PATH, 0o600)
+        print(
+            f"gantt: seeded credentials -> {CREDS_PATH} "
+            f"(one-time copy from {SEED_CREDS_PATH})",
+            file=sys.stderr,
+        )
+
+    if not creds_path.exists():
+        die(
+            f"OAuth client credentials not found at {creds_path}.\n"
+            "  Place an OAuth 2.0 Desktop client credentials.json at "
+            "~/.config/gantt/credentials.json,\n"
+            "  or set GANTT_CREDS to point at an existing file."
+        )
+
+    creds = None
+    if TOKEN_PATH.exists():
+        try:
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+        except Exception:
+            creds = None
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+            except Exception:
+                creds = None
+        if not creds or not creds.valid:
+            print(
+                "gantt: no valid token, opening browser for OAuth consent...",
+                file=sys.stderr,
+            )
+            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(TOKEN_PATH, "w") as fh:
+            fh.write(creds.to_json())
+        os.chmod(TOKEN_PATH, 0o600)
+    return creds
+
+
+def get_client():
+    try:
+        import gspread
+    except ImportError:
+        die("gantt dependencies not installed. Run: gantt setup")
+    return gspread.authorize(get_credentials())
+
+
+# ---------- _Config tab seed ----------
+
+# US federal holidays observed 2026-2027. Maintained here to keep bootstrap
+# self-contained; users can edit the _Config tab directly to add/remove dates.
+_HOLIDAYS_SEED = [
+    ("2026-01-01", "New Year's Day"),
+    ("2026-01-19", "Martin Luther King Jr. Day"),
+    ("2026-02-16", "Presidents' Day"),
+    ("2026-05-25", "Memorial Day"),
+    ("2026-06-19", "Juneteenth"),
+    ("2026-07-03", "Independence Day (observed)"),
+    ("2026-09-07", "Labor Day"),
+    ("2026-10-12", "Columbus Day"),
+    ("2026-11-11", "Veterans Day"),
+    ("2026-11-26", "Thanksgiving"),
+    ("2026-12-25", "Christmas"),
+    ("2027-01-01", "New Year's Day"),
+    ("2027-01-18", "Martin Luther King Jr. Day"),
+    ("2027-02-15", "Presidents' Day"),
+    ("2027-05-31", "Memorial Day"),
+    ("2027-06-18", "Juneteenth (observed)"),
+    ("2027-07-05", "Independence Day (observed)"),
+    ("2027-09-06", "Labor Day"),
+    ("2027-10-11", "Columbus Day"),
+    ("2027-11-11", "Veterans Day"),
+    ("2027-11-25", "Thanksgiving"),
+    ("2027-12-24", "Christmas (observed)"),
+]
+
+# Seed palettes; users override in-sheet. Hex is what conditional formatting reads.
+_TEAM_COLORS_SEED = [
+    ("Default", "#4285F4"),
+    ("Eng", "#0F9D58"),
+    ("Design", "#DB4437"),
+    ("PM", "#F4B400"),
+    ("Research", "#AB47BC"),
+]
+
+_STATUS_COLORS_SEED = [
+    ("Not Started", "#BDBDBD"),
+    ("In Progress", "#4285F4"),
+    ("Blocked", "#DB4437"),
+    ("At Risk", "#F4B400"),
+    ("Done", "#0F9D58"),
+]
+
+_WORKING_DAYS_SEED = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+
+def _config_tab_grid() -> list[list[str]]:
+    """Build the _Config tab as a 2D grid. Columns:
+       A: Working Days | C: Holidays | D: Description | F: Team | G: Hex | I: Status | J: Hex
+    """
+    headers = [
+        "Working Days", "", "Holidays", "Description",
+        "", "Team", "Hex Color", "", "Status", "Hex Color",
+    ]
+    # Determine row count: max of any section.
+    rows = max(len(_WORKING_DAYS_SEED), len(_HOLIDAYS_SEED),
+               len(_TEAM_COLORS_SEED), len(_STATUS_COLORS_SEED))
+    grid: list[list[str]] = [headers]
+    for i in range(rows):
+        row = [""] * len(headers)
+        if i < len(_WORKING_DAYS_SEED):
+            row[0] = _WORKING_DAYS_SEED[i]
+        if i < len(_HOLIDAYS_SEED):
+            row[2], row[3] = _HOLIDAYS_SEED[i]
+        if i < len(_TEAM_COLORS_SEED):
+            row[5], row[6] = _TEAM_COLORS_SEED[i]
+        if i < len(_STATUS_COLORS_SEED):
+            row[8], row[9] = _STATUS_COLORS_SEED[i]
+        grid.append(row)
+    return grid
+
+
+# ---------- subcommand handlers (placeholders) ----------
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    if not REQ_FILE.exists():
+        die(f"requirements.txt not found at {REQ_FILE}")
+
+    # Sanity: setup must run under the system interpreter, not the venv's own python.
+    # Use sys.prefix (not sys.executable) — see the trampoline comment above for why
+    # resolving sys.executable yields false positives under Ubuntu's python3-venv.
+    if VENV_DIR.exists() and Path(sys.prefix).resolve() == VENV_DIR.resolve():
+        die("gantt setup must run under the system python3, not the venv interpreter.")
+
+    if VENV_DIR.exists() and not args.force:
+        ok(f"venv already exists at {VENV_DIR} (use --force to rebuild)")
+        return 0
+
+    if VENV_DIR.exists() and args.force:
+        print(f"gantt: removing existing venv at {VENV_DIR}", file=sys.stderr)
+        shutil.rmtree(VENV_DIR)
+
+    print(f"gantt: creating venv at {VENV_DIR} ...", file=sys.stderr)
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "venv", str(VENV_DIR)],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        die(f"venv creation failed ({e}). You may need: sudo apt install python3-venv")
+
+    if not VENV_PIP.exists():
+        die(f"pip not found in venv at {VENV_PIP} -- venv may be corrupt; rerun with --force")
+
+    print("gantt: upgrading pip ...", file=sys.stderr)
+    subprocess.run([str(VENV_PIP), "install", "--upgrade", "pip", "--quiet"], check=True)
+    print(f"gantt: installing from {REQ_FILE} ...", file=sys.stderr)
+    subprocess.run([str(VENV_PIP), "install", "-r", str(REQ_FILE), "--quiet"], check=True)
+
+    ok(f"venv ready at {VENV_DIR} -- next: gantt bootstrap")
+    return 0
+
+
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    cfg = read_config()
+    if "sheet_id" in cfg and not args.force:
+        die(
+            f"sheet already bootstrapped: {cfg.get('sheet_url', cfg['sheet_id'])}\n"
+            "  use --force to recreate (old sheet is NOT deleted)"
+        )
+
+    client = get_client()
+    print("gantt: creating new Google Sheet...", file=sys.stderr)
+    ss = client.create(SHEET_TITLE)
+
+    # Rename the default Sheet1 → _Config, resize, write the seed grid.
+    ws = ss.sheet1
+    ws.update_title("_Config")
+    grid = _config_tab_grid()
+    ws.resize(rows=max(len(grid) + 5, 50), cols=len(grid[0]) + 2)
+    ws.update(range_name="A1", values=grid, value_input_option="USER_ENTERED")
+    # Bold the header row.
+    ws.format("A1:J1", {"textFormat": {"bold": True}})
+
+    sheet_url = f"https://docs.google.com/spreadsheets/d/{ss.id}"
+    write_config({"sheet_id": ss.id, "sheet_url": sheet_url, "title": SHEET_TITLE})
+    ok(f"bootstrapped -> {sheet_url}")
+    return 0
+
+
+def _open_workbook():
+    """Open the bound portfolio workbook. Dies with a friendly message if not bootstrapped."""
+    cfg = read_config()
+    if "sheet_id" not in cfg:
+        die("no sheet bootstrapped yet. Run: gantt bootstrap")
+    client = get_client()
+    return client.open_by_key(cfg["sheet_id"])
+
+
+def cmd_program_new(args: argparse.Namespace) -> int:
+    from datetime import date as _date
+    from gantt_lib import schema
+
+    ss = _open_workbook()
+    tab_name = schema.program_tab_name(args.name)
+
+    existing = {ws.title for ws in ss.worksheets()}
+    if tab_name in existing and not args.force:
+        die(f"tab {tab_name!r} already exists. Use --force to recreate.")
+    if tab_name in existing and args.force:
+        ss.del_worksheet(ss.worksheet(tab_name))
+
+    config_ws = ss.worksheet("_Config")
+    palette = schema.read_team_palette_from_config(config_ws)
+
+    # Calendar-day timeline (Mon-Sun all visible; weekends shaded grey via CF).
+    days = schema.make_timeline_days(_date.today())
+    quarter_runs, month_runs, week_runs = schema.grouping_runs(days)
+    total_cols = schema.NUM_DATA_COLS + len(days)
+    total_rows = schema.HEADER_ROWS + schema.DEFAULT_DATA_ROWS
+
+    print(f"gantt: creating tab {tab_name} ({total_cols} cols, {total_rows} rows, "
+          f"{len(days)} daily columns)...", file=sys.stderr)
+    ws = ss.add_worksheet(title=tab_name, rows=total_rows, cols=total_cols)
+
+    # Build the 4 header rows. Q/M/W rows only get labels at the start of each
+    # run (merge takes the top-left value). Day row has day-of-month numbers,
+    # with the data headers (A-M) at its left.
+    blank_timeline = [""] * len(days)
+
+    quarter_row = list(blank_timeline)
+    for start_idx, _end_idx, label in quarter_runs:
+        quarter_row[start_idx] = label
+
+    month_row = list(blank_timeline)
+    for start_idx, _end_idx, label in month_runs:
+        month_row[start_idx] = label
+
+    week_row = list(blank_timeline)
+    for start_idx, _end_idx, label in week_runs:
+        week_row[start_idx] = label
+
+    # Day cells STORE the full date (so WEEKDAY/comparisons work) and DISPLAY
+    # just the day number via the numberFormat applied below.
+    day_row = list(schema.DATA_HEADERS) + [d.isoformat() for d in days]
+
+    quarter_full = [""] * schema.NUM_DATA_COLS + quarter_row
+    month_full = [""] * schema.NUM_DATA_COLS + month_row
+    week_full = [""] * schema.NUM_DATA_COLS + week_row
+
+    ws.update(
+        range_name="A1",
+        values=[quarter_full, month_full, week_full, day_row],
+        value_input_option="USER_ENTERED",
+    )
+
+    # Single ARRAYFORMULA at the top-left of the task region fills the entire
+    # timeline area. New tasks added inside the row range are rendered
+    # automatically — `gantt task add` only writes cols A-M.
+    first_col_letter = schema.col_letter(schema.TIMELINE_FIRST_COL_IDX + 1)
+    last_col_letter = schema.col_letter(schema.TIMELINE_FIRST_COL_IDX + len(days))
+    last_task_row = schema.HEADER_ROWS + schema.DEFAULT_DATA_ROWS  # 1-based inclusive
+    arrayformula = schema.timeline_arrayformula(
+        first_task_row=schema.FIRST_TASK_ROW,
+        last_task_row=last_task_row,
+        first_timeline_col=first_col_letter,
+        last_timeline_col=last_col_letter,
+    )
+    ws.update(
+        range_name=f"{first_col_letter}{schema.FIRST_TASK_ROW}",
+        values=[[arrayformula]],
+        value_input_option="USER_ENTERED",
+    )
+
+    # Build all batch requests.
+    requests = [
+        schema.bold_header_rows_request(ws.id, end_col=total_cols),
+        schema.day_row_format_request(ws.id),
+        schema.timeline_column_width_request(ws.id),
+        schema.wrap_strategy_request(ws.id),
+        schema.freeze_layout_request(ws.id),
+        schema.status_validation_request(ws.id),
+        schema.milestone_checkbox_request(ws.id),
+    ]
+
+    # Merge each grouping run on its respective header row.
+    for runs, header_row in (
+        (quarter_runs, schema.QUARTER_HEADER_ROW - 1),
+        (month_runs, schema.MONTH_HEADER_ROW - 1),
+        (week_runs, schema.WEEK_HEADER_ROW - 1),
+    ):
+        for start_idx, end_idx, _label in runs:
+            if end_idx > start_idx:
+                requests.append(schema.merge_cells_request(
+                    ws.id,
+                    row_idx=header_row,
+                    start_col_idx=schema.TIMELINE_FIRST_COL_IDX + start_idx,
+                    end_col_idx_exclusive=schema.TIMELINE_FIRST_COL_IDX + end_idx + 1,
+                ))
+
+    # CF rules: weekend (top priority, last added) > team colors.
+    for team_name, hex_color in palette:
+        requests.append(schema.team_color_cf_request(ws.id, team_name, hex_color))
+    requests.append(schema.weekend_cf_request(ws.id))
+
+    # Outline each merged Q/M column range with full-vertical left+right
+    # borders. Months first (subtle), then quarters (heavier) so quarter
+    # borders overwrite at quarter-start columns.
+    for start_idx, end_idx, _label in month_runs:
+        requests.append(schema.boundary_border_request(
+            ws.id,
+            start_col_idx=schema.TIMELINE_FIRST_COL_IDX + start_idx,
+            end_col_idx_exclusive=schema.TIMELINE_FIRST_COL_IDX + end_idx + 1,
+            total_rows=total_rows,
+            weight="month",
+        ))
+    for start_idx, end_idx, _label in quarter_runs:
+        requests.append(schema.boundary_border_request(
+            ws.id,
+            start_col_idx=schema.TIMELINE_FIRST_COL_IDX + start_idx,
+            end_col_idx_exclusive=schema.TIMELINE_FIRST_COL_IDX + end_idx + 1,
+            total_rows=total_rows,
+            weight="quarter",
+        ))
+
+    ss.batch_update({"requests": requests})
+
+    ok(
+        f"program {args.name} created — tab {tab_name}, "
+        f"{len(days)} calendar cols, "
+        f"{len(quarter_runs)} quarters / {len(month_runs)} months / {len(week_runs)} weeks, "
+        f"{len(palette)} team CF rules + weekend shading + Q/M cell borders"
+    )
+    return 0
+
+
+def _open_program_tab(args: argparse.Namespace):
+    """Open the P_<program> tab on the bound workbook. Dies on missing tab."""
+    from gantt_lib import schema
+    ss = _open_workbook()
+    tab_name = schema.program_tab_name(args.program)
+    try:
+        return ss, ss.worksheet(tab_name)
+    except Exception:
+        die(f"program {args.program!r} not found (tab {tab_name!r}). "
+            f"Run: gantt program new {args.program}")
+
+
+def _apply_field_args(task, args: argparse.Namespace) -> None:
+    """Apply non-None argparse field flags onto a Task in place. Used by add and update."""
+    from datetime import date as _date
+
+    if getattr(args, "name", None) is not None:
+        task.name = args.name
+    if getattr(args, "owner", None) is not None:
+        task.owner = args.owner
+    if getattr(args, "team", None) is not None:
+        task.team = args.team
+    if getattr(args, "start", None) is not None:
+        task.start = _date.fromisoformat(args.start)
+    if getattr(args, "end", None) is not None:
+        task.end = _date.fromisoformat(args.end)
+    if getattr(args, "duration", None) is not None:
+        task.duration = args.duration
+    if getattr(args, "percent", None) is not None:
+        task.percent_complete = args.percent
+    if getattr(args, "status", None) is not None:
+        task.status = args.status
+    if getattr(args, "predecessors", None) is not None:
+        task.predecessors = args.predecessors
+    if getattr(args, "milestone", None) is not None:
+        task.milestone = args.milestone
+    if getattr(args, "notes", None) is not None:
+        task.notes = args.notes
+
+
+def cmd_task_add(args: argparse.Namespace) -> int:
+    from gantt_lib import sheets as gs_sheets
+    from gantt_lib.model import Task, next_wbs_id
+
+    ss, ws = _open_program_tab(args)
+
+    existing = gs_sheets.read_program_tasks(ws)
+    new_id = next_wbs_id(existing, parent=args.parent)
+
+    task = Task(
+        id=new_id,
+        level=(args.parent.count(".") + 2) if args.parent else 1,
+        name=args.name,
+    )
+    _apply_field_args(task, args)
+
+    row = gs_sheets.append_task(ws, task)
+    ok(f"task {args.program}/{new_id} added — row {row}")
+    return 0
+
+
+def cmd_task_update(args: argparse.Namespace) -> int:
+    from gantt_lib import sheets as gs_sheets
+
+    ss, ws = _open_program_tab(args)
+    row = gs_sheets.find_task_row(ws, args.id)
+    if row is None:
+        die(f"task {args.program}/{args.id} not found")
+
+    # Read current state, apply updates, write back.
+    tasks = gs_sheets.read_program_tasks(ws)
+    target = next((t for t in tasks if t.id == args.id), None)
+    if target is None:
+        # Should not happen given find_task_row succeeded; defensive.
+        die(f"task {args.program}/{args.id} not found in data region")
+    _apply_field_args(target, args)
+    gs_sheets.update_task_data(ws, row, target)
+    ok(f"task {args.program}/{args.id} updated — row {row}")
+    return 0
+
+
+def cmd_task_delete(args: argparse.Namespace) -> int:
+    from gantt_lib import sheets as gs_sheets
+    from gantt_lib.refs import referencing_tasks
+
+    ss, ws = _open_program_tab(args)
+    row = gs_sheets.find_task_row(ws, args.id)
+    if row is None:
+        die(f"task {args.program}/{args.id} not found")
+
+    tasks = gs_sheets.read_program_tasks(ws)
+    refs = referencing_tasks(tasks, args.id)
+    if refs:
+        ref_ids = ", ".join(t.id for t in refs)
+        die(
+            f"cannot delete {args.program}/{args.id}: referenced as predecessor by "
+            f"[{ref_ids}]. Update or remove those predecessors first."
+        )
+
+    gs_sheets.delete_task_row(ws, row)
+    ok(f"task {args.program}/{args.id} deleted — row {row}")
+    return 0
+
+
+def cmd_info(args: argparse.Namespace) -> int:
+    cfg = read_config()
+    print(f"gantt: bundle  {BUNDLE_DIR}")
+    if cfg.get("sheet_url"):
+        print(f"  sheet:       {cfg['sheet_url']}")
+        print(f"  title:       {cfg.get('title', SHEET_TITLE)}")
+    print(f"  venv:        {VENV_DIR}  (exists: {VENV_PY.exists()})")
+    print(f"  config:      {CONFIG_PATH}  (exists: {CONFIG_PATH.exists()})")
+    print(f"  token:       {TOKEN_PATH}  (exists: {TOKEN_PATH.exists()})")
+    print(f"  credentials: {CREDS_PATH}  (exists: {CREDS_PATH.exists()})")
+    print(f"  python:      {sys.executable}")
+    print(f"  sys.prefix:  {sys.prefix}")
+    if not cfg:
+        print("gantt: no sheet bootstrapped yet. Run: gantt bootstrap")
+    return 0
+
+
+# ---------- argparse wiring ----------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gantt",
+        description="Program plan CLI backed by Google Sheets.",
+    )
+    sub = parser.add_subparsers(dest="cmd", metavar="<subcommand>")
+    sub.required = True
+
+    p_setup = sub.add_parser(
+        "setup",
+        help="create bundle-local venv and install dependencies",
+    )
+    p_setup.add_argument(
+        "--force", action="store_true", help="rebuild the venv from scratch"
+    )
+    p_setup.set_defaults(func=cmd_setup)
+
+    p_bootstrap = sub.add_parser(
+        "bootstrap",
+        help="OAuth consent + create the portfolio workbook",
+    )
+    p_bootstrap.add_argument(
+        "--force",
+        action="store_true",
+        help="create a new sheet (does not delete the old one)",
+    )
+    p_bootstrap.set_defaults(func=cmd_bootstrap)
+
+    p_info = sub.add_parser(
+        "info",
+        help="print sheet URL, config paths, and venv status",
+    )
+    p_info.set_defaults(func=cmd_info)
+
+    p_program = sub.add_parser(
+        "program",
+        help="manage program tabs",
+    )
+    p_program_sub = p_program.add_subparsers(dest="program_cmd", metavar="<program-cmd>")
+    p_program_sub.required = True
+
+    p_pn = p_program_sub.add_parser(
+        "new",
+        help="create a new program tab with the v1 schema",
+    )
+    p_pn.add_argument("name", help="program short name (becomes tab P_<name>)")
+    p_pn.add_argument(
+        "--force",
+        action="store_true",
+        help="delete and recreate the tab if it exists",
+    )
+    p_pn.set_defaults(func=cmd_program_new)
+
+    # ---------- task add / update / delete ----------
+
+    def add_task_field_args(p, *, for_update: bool):
+        """Field flags shared by add and update. For update, --name is optional;
+        for add, name is positional."""
+        p.add_argument("--owner", default=None)
+        p.add_argument("--team", default=None)
+        p.add_argument("--start", default=None, help="YYYY-MM-DD")
+        p.add_argument("--end", default=None, help="YYYY-MM-DD")
+        p.add_argument("--duration", type=int, default=None,
+                       help="working days")
+        p.add_argument("--percent", type=int, default=None,
+                       help="0-100 percent complete")
+        p.add_argument("--status", default=None,
+                       choices=["Not Started", "In Progress", "Blocked",
+                                "At Risk", "Done"])
+        p.add_argument("--predecessors", default=None,
+                       help='DSL string, e.g. "1.2FS+3, 1.3SS"')
+        p.add_argument(
+            "--milestone", default=None, action=argparse.BooleanOptionalAction,
+            help="--milestone or --no-milestone",
+        )
+        p.add_argument("--notes", default=None)
+        if for_update:
+            p.add_argument("--name", default=None, help="rename the task")
+
+    p_task = sub.add_parser("task", help="manage tasks within a program")
+    p_task_sub = p_task.add_subparsers(dest="task_cmd", metavar="<task-cmd>")
+    p_task_sub.required = True
+
+    p_ta = p_task_sub.add_parser("add", help="append a new task to a program")
+    p_ta.add_argument("program", help="program short name")
+    p_ta.add_argument("name", help="task name")
+    p_ta.add_argument("--parent", default=None,
+                      help="WBS id of parent task (e.g. 1, 1.2). Top-level if omitted.")
+    add_task_field_args(p_ta, for_update=False)
+    p_ta.set_defaults(func=cmd_task_add)
+
+    p_tu = p_task_sub.add_parser("update", help="modify fields on an existing task")
+    p_tu.add_argument("program")
+    p_tu.add_argument("id", help="WBS id (e.g. 1.2)")
+    add_task_field_args(p_tu, for_update=True)
+    p_tu.set_defaults(func=cmd_task_update)
+
+    p_td = p_task_sub.add_parser("delete", help="remove a task (refuses if referenced)")
+    p_td.add_argument("program")
+    p_td.add_argument("id")
+    p_td.set_defaults(func=cmd_task_delete)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
