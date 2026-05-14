@@ -452,6 +452,44 @@ def timeline_column_width_request(sheet_id: int, pixels: int = TIMELINE_COL_PIXE
     }
 
 
+def add_row_group_request(sheet_id: int, start_row_idx: int,
+                           end_row_idx_exclusive: int) -> dict:
+    """Add a Sheets row dimension group over the given 0-based row range.
+
+    Sheets infers depth from containment — issue an outer group first, then a
+    nested group on a sub-range, and Sheets renders the +/− toggle hierarchy.
+    """
+    return {
+        "addDimensionGroup": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": start_row_idx,
+                "endIndex": end_row_idx_exclusive,
+            }
+        }
+    }
+
+
+def delete_row_group_request(sheet_id: int, start_row_idx: int,
+                              end_row_idx_exclusive: int) -> dict:
+    """Decrement one depth level of row grouping over the given 0-based range.
+
+    Used to wipe existing groups before re-applying a fresh structure on
+    `gantt recalc`. To fully clear a depth-N group, call once per depth.
+    """
+    return {
+        "deleteDimensionGroup": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": start_row_idx,
+                "endIndex": end_row_idx_exclusive,
+            }
+        }
+    }
+
+
 def merge_cells_request(sheet_id: int, row_idx: int, start_col_idx: int,
                         end_col_idx_exclusive: int) -> dict:
     return {

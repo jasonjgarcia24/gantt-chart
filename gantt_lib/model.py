@@ -83,7 +83,11 @@ class Task:
         return cls(
             id=r[0],
             level=_parse_int(r[1], default=1),
-            name=r[2],
+            # Strip leading indent characters — spaces and dashes from the
+            # sheets layer's level-derived prefix (currently "-- " per level,
+            # historically "  "). Tradeoff: a task name intentionally starting
+            # with " " or "-" loses its leading characters.
+            name=r[2].lstrip(" -"),
             owner=r[3],
             team=r[4],
             start=_parse_date(r[5]),

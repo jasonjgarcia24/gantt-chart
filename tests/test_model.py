@@ -185,3 +185,32 @@ def test_next_wbs_when_parent_has_no_children_yet():
 def test_next_wbs_handles_gap_in_top_level_numbering():
     # User manually deleted "2" — next id is max+1, not the gap.
     assert next_wbs_id(_tasks("1", "3"), parent=None) == "4"
+
+
+# ---------- name indentation handling ----------
+
+def test_from_row_strips_dash_indent_from_name():
+    # Sheet stores "-- Draft OKR doc" (level-2 indent); model exposes raw name.
+    row = ["1.1", "2", "-- Draft OKR doc", "", "", "", "", "0", "0", "", "", "", ""]
+    t = Task.from_row(row)
+    assert t.name == "Draft OKR doc"
+
+
+def test_from_row_strips_legacy_space_indent_from_name():
+    # Backwards-compat: tasks indented with the old "  " unit also get stripped.
+    row = ["1.1", "2", "  Draft OKR doc", "", "", "", "", "0", "0", "", "", "", ""]
+    t = Task.from_row(row)
+    assert t.name == "Draft OKR doc"
+
+
+def test_from_row_strips_nested_dash_indent_at_level_three():
+    row = ["1.1.1", "3", "-- -- Outline", "", "", "", "", "0", "0", "", "", "", ""]
+    t = Task.from_row(row)
+    assert t.name == "Outline"
+
+
+def test_from_row_preserves_inner_whitespace():
+    # Only LEADING whitespace/dash is stripped — inner spaces are part of the name.
+    row = ["1", "1", "  Build  prototype  ", "", "", "", "", "0", "0", "", "", "", ""]
+    t = Task.from_row(row)
+    assert t.name == "Build  prototype  "  # leading stripped, inner+trailing kept

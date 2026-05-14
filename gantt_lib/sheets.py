@@ -14,6 +14,27 @@ from .model import Task
 # Three header rows (quarters/months/weeks); tasks start at row 4.
 FIRST_DATA_ROW = schema.FIRST_TASK_ROW
 
+def indent_prefix(level: int) -> str:
+    """Tree-style level prefix applied to col C on write.
+
+      L1 → ''         (no prefix)
+      L2 → '-- '      (2 dashes + space)
+      L3 → '---- '    (4 dashes + space)
+      L4 → '------ '  (6 dashes + space)
+
+    Stripped on read in Task.from_row via lstrip(' -').
+    """
+    if level <= 1:
+        return ""
+    return "--" * (level - 1) + " "
+
+
+def _indented_row(task: Task) -> list[str]:
+    """Build the data row with col C name prefixed by the task's level indent."""
+    row = task.to_row()
+    row[2] = indent_prefix(task.level) + task.name
+    return row
+
 
 def read_program_tasks(ws) -> list[Task]:
     """Read the editable region (cols A–M) and return a list of Task objects.
@@ -60,7 +81,7 @@ def append_task(ws, task: Task) -> int:
     row = _next_empty_row(ws)
     ws.update(
         range_name=f"A{row}",
-        values=[task.to_row()],
+        values=[_indented_row(task)],
         value_input_option="USER_ENTERED",
     )
     return row
@@ -75,9 +96,37 @@ def update_task_data(ws, row: int, task: Task) -> None:
     last_col = schema.col_letter(schema.NUM_DATA_COLS)
     ws.update(
         range_name=f"A{row}:{last_col}{row}",
-        values=[task.to_row()],
+        values=[_indented_row(task)],
         value_input_option="USER_ENTERED",
     )
+
+
+def compute_row_groups(tasks_with_rows: list[tuple[Task, int]]) -> list[tuple[int, int]]:
+    """Compute (start_row, end_row_exclusive) ranges for each WBS-anchor with descendants.
+
+    For each task at index i, scan forward for consecutive tasks whose `level`
+    is strictly greater (descendants). If any exist, emit a group spanning
+    those descendant rows.
+
+    Sheets infers depth from containment: a depth-2 group nested inside a
+    depth-1 range becomes a sub-group automatically when both addDimensionGroup
+    requests are issued.
+
+    Both indices are 0-based (Sheets API convention) and exclusive at end.
+    Assumes tasks are in WBS-sorted order — children directly follow parents.
+    """
+    groups: list[tuple[int, int]] = []
+    n = len(tasks_with_rows)
+    for i in range(n):
+        anchor_task, _ = tasks_with_rows[i]
+        j = i + 1
+        while j < n and tasks_with_rows[j][0].level > anchor_task.level:
+            j += 1
+        if j > i + 1:
+            start_1based = tasks_with_rows[i + 1][1]
+            end_1based = tasks_with_rows[j - 1][1] + 1
+            groups.append((start_1based - 1, end_1based - 1))
+    return groups
 
 
 def delete_task_row(ws, row: int) -> None:
