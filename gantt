@@ -515,6 +515,12 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     else:
         row = gs_sheets.append_task(ws, task)
     ok(f"task {args.program}/{new_id} added — row {row}")
+    # Auto-cascade so the new task's Start/End and any dependent tasks are
+    # filled in immediately — single-step UX vs add-then-recalc.
+    summary = _run_recalc(ss, ws, args.program,
+                          error_label=f"task {args.program}/{new_id} recalc")
+    if summary["row_count"] > 0:
+        ok(_format_recalc_line(args.program, summary))
     return 0
 
 
@@ -535,6 +541,11 @@ def cmd_task_update(args: argparse.Namespace) -> int:
     _apply_field_args(target, args)
     gs_sheets.update_task_data(ws, row, target)
     ok(f"task {args.program}/{args.id} updated — row {row}")
+    # Auto-cascade — duration / predecessor / start changes ripple downstream.
+    summary = _run_recalc(ss, ws, args.program,
+                          error_label=f"task {args.program}/{args.id} recalc")
+    if summary["row_count"] > 0:
+        ok(_format_recalc_line(args.program, summary))
     return 0
 
 
