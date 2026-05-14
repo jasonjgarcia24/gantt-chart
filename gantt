@@ -648,19 +648,46 @@ def _run_recalc(ss, ws, program_name: str, error_label: str) -> dict:
     if updates:
         ws.batch_update(updates, value_input_option="USER_ENTERED")
 
-    # Reset row grouping based on current WBS structure. Wipe existing
-    # groups then add a fresh set computed from the in-memory tasks. Each
-    # call to deleteDimensionGroup removes one depth level — and Sheets
-    # returns one rowGroups entry per depth level, so deleting them all
-    # wipes the tree.
+    # WBS row sort: if the existing row order doesn't match WBS order,
+    # rewrite the entire task region in sorted order so children sit
+    # directly under their parents.
+    from gantt_lib.model import wbs_sort_key
+    sorted_tasks = sorted(tasks, key=lambda t: wbs_sort_key(t.id))
+    current_order = [t.id for t, _r, _raw in pairs]
+    sorted_order = [t.id for t in sorted_tasks]
+    rows_reordered = 0
+    if current_order != sorted_order:
+        rows_reordered = sum(
+            1 for t in tasks
+            if (schema.FIRST_TASK_ROW + sorted_order.index(t.id)) != row_by_id[t.id]
+        )
+        # Build the full task region (sorted tasks + empty padding).
+        all_rows = [
+            [""] * schema.NUM_DATA_COLS for _ in range(schema.DEFAULT_DATA_ROWS)
+        ]
+        for i, t in enumerate(sorted_tasks):
+            all_rows[i] = gs_sheets._indented_row(t)
+        last_col = schema.col_letter(schema.NUM_DATA_COLS)
+        last_row = schema.FIRST_TASK_ROW + schema.DEFAULT_DATA_ROWS - 1
+        ws.update(
+            range_name=f"A{schema.FIRST_TASK_ROW}:{last_col}{last_row}",
+            values=all_rows,
+            value_input_option="USER_ENTERED",
+        )
+        # Row group computation uses the new (sorted) row positions.
+        sorted_pairs_for_groups = [
+            (t, schema.FIRST_TASK_ROW + i) for i, t in enumerate(sorted_tasks)
+        ]
+    else:
+        sorted_pairs_for_groups = [(t, row) for t, row, _raw in pairs]
+
+    # Refresh row grouping from current WBS structure (post-sort row positions).
     metadata = ss.fetch_sheet_metadata(params={"includeGridData": False})
     target_sheet = next(
         s for s in metadata["sheets"] if s["properties"]["sheetId"] == ws.id
     )
     existing_row_groups = target_sheet.get("rowGroups", [])
-    new_row_groups = gs_sheets.compute_row_groups(
-        [(t, row) for t, row, _raw in pairs]
-    )
+    new_row_groups = gs_sheets.compute_row_groups(sorted_pairs_for_groups)
     group_requests = []
     for g in existing_row_groups:
         rng = g["range"]
@@ -677,6 +704,7 @@ def _run_recalc(ss, ws, program_name: str, error_label: str) -> dict:
         "date_changed_ids": date_changed_ids,
         "status_changed_ids": status_changed_ids,
         "name_changed_ids": name_changed_ids,
+        "rows_reordered": rows_reordered,
         "max_shift": max_shift,
         "latest_end": max((t.end for t in tasks if t.end), default=None),
         "row_count": len(tasks),
@@ -691,6 +719,8 @@ def _format_recalc_line(program_name: str, summary: dict) -> str:
         parts.append(f"{len(summary['status_changed_ids'])} statuses updated")
     if summary["name_changed_ids"]:
         parts.append(f"{len(summary['name_changed_ids'])} names re-indented")
+    if summary.get("rows_reordered"):
+        parts.append(f"{summary['rows_reordered']} rows reordered")
     if summary["max_shift"] != 0:
         parts.append(f"max {summary['max_shift']:+d}d")
     if summary["latest_end"]:
@@ -705,6 +735,7 @@ def cmd_recalc(args: argparse.Namespace) -> int:
         ok(f"recalc {args.program} — no tasks (nothing to do)")
         return 0
     ok(_format_recalc_line(args.program, summary))
+    return 0
     return 0
 
 

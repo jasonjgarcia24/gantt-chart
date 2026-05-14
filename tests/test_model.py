@@ -9,7 +9,7 @@ from datetime import date
 
 import pytest
 
-from gantt_lib.model import Program, Status, Task, next_wbs_id
+from gantt_lib.model import Program, Status, Task, next_wbs_id, wbs_sort_key
 
 # Column order from v1 schema (A–M):
 # id, level, name, owner, team, start, end, duration, percent_complete,
@@ -185,6 +185,20 @@ def test_next_wbs_when_parent_has_no_children_yet():
 def test_next_wbs_handles_gap_in_top_level_numbering():
     # User manually deleted "2" — next id is max+1, not the gap.
     assert next_wbs_id(_tasks("1", "3"), parent=None) == "4"
+
+
+# ---------- wbs_sort_key ----------
+
+def test_wbs_sort_key_orders_tree_correctly():
+    ids = ["10", "2", "1", "1.1", "1.1.1", "1.2", "5.1"]
+    sorted_ids = sorted(ids, key=wbs_sort_key)
+    assert sorted_ids == ["1", "1.1", "1.1.1", "1.2", "2", "5.1", "10"]
+
+
+def test_wbs_sort_key_handles_double_digits():
+    # "10" > "2" numerically (not string-compared as "1" < "2").
+    assert wbs_sort_key("10") > wbs_sort_key("2")
+    assert wbs_sort_key("2.10") > wbs_sort_key("2.9")
 
 
 # ---------- name indentation handling ----------

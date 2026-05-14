@@ -131,6 +131,17 @@ class Program:
         return None
 
 
+def wbs_sort_key(task_id: str) -> tuple:
+    """Sort key for WBS ids that orders children right after their parents.
+
+    Examples (sorted ascending):  '1' < '1.1' < '1.1.1' < '1.2' < '2' < '10'.
+    Tuple comparison gives the desired tree order — shorter prefixes sort
+    before longer ones with the same prefix (Python tuple semantics), and
+    integer comparison handles '10' > '2' correctly.
+    """
+    return tuple(int(p) for p in task_id.split(".") if p)
+
+
 def next_wbs_id(tasks: list[Task], parent: Optional[str] = None) -> str:
     """Compute the next sibling WBS id under the given parent (or top-level if None).
 
