@@ -452,6 +452,41 @@ def timeline_column_width_request(sheet_id: int, pixels: int = TIMELINE_COL_PIXE
     }
 
 
+def clear_task_bold_request(sheet_id: int, num_data_rows: int = DEFAULT_DATA_ROWS) -> dict:
+    """Set bold=False across all task rows (cols A-M) — used to wipe prior
+    critical-path highlighting before applying a fresh set."""
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": HEADER_ROWS,
+                "endRowIndex": HEADER_ROWS + num_data_rows,
+                "startColumnIndex": 0,
+                "endColumnIndex": NUM_DATA_COLS,
+            },
+            "cell": {"userEnteredFormat": {"textFormat": {"bold": False}}},
+            "fields": "userEnteredFormat.textFormat.bold",
+        }
+    }
+
+
+def bold_row_request(sheet_id: int, row_idx_0based: int) -> dict:
+    """Set bold=True on cols A-M for a single row — used to highlight a critical-path task."""
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": row_idx_0based,
+                "endRowIndex": row_idx_0based + 1,
+                "startColumnIndex": 0,
+                "endColumnIndex": NUM_DATA_COLS,
+            },
+            "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+            "fields": "userEnteredFormat.textFormat.bold",
+        }
+    }
+
+
 def add_row_group_request(sheet_id: int, start_row_idx: int,
                            end_row_idx_exclusive: int) -> dict:
     """Add a Sheets row dimension group over the given 0-based row range.

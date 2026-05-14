@@ -664,6 +664,63 @@ def cmd_recalc(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_critical_path(args: argparse.Namespace) -> int:
+    from gantt_lib import schema, sheets as gs_sheets
+    from gantt_lib.cascade import (
+        CycleError,
+        MissingPredecessorError,
+        UnanchoredError,
+        cascade,
+    )
+    from gantt_lib.critical_path import critical_path
+    from gantt_lib.model import Program
+
+    ss, ws = _open_program_tab(args)
+    config_ws = ss.worksheet("_Config")
+    holidays = schema.read_holidays_from_config(config_ws)
+
+    pairs = gs_sheets.read_program_tasks_with_rows(ws)
+    if not pairs:
+        ok(f"critical-path {args.program} — no tasks")
+        return 0
+
+    tasks = [t for t, _r, _raw in pairs]
+    row_by_id = {t.id: row for t, row, _raw in pairs}
+
+    # Cascade in memory (no writes here — `gantt recalc` is the writer).
+    program = Program(name=args.program, tasks=tasks, holidays=holidays)
+    try:
+        cascade(program)
+    except (CycleError, UnanchoredError, MissingPredecessorError) as e:
+        die(f"critical-path {args.program} — {e}")
+
+    cp = critical_path(program)
+    if not cp:
+        ok(f"critical-path {args.program} — none (no zero-slack tasks)")
+        return 0
+
+    # Wipe prior highlighting then bold each critical-path row.
+    requests = [schema.clear_task_bold_request(ws.id)]
+    for tid in cp:
+        row = row_by_id.get(tid)
+        if row is not None:
+            requests.append(schema.bold_row_request(ws.id, row - 1))
+    ss.batch_update({"requests": requests})
+
+    # Project length: span from earliest start to latest end (working days).
+    from gantt_lib.dates import working_days_between
+    starts = [t.start for t in tasks if t.start]
+    ends = [t.end for t in tasks if t.end]
+    length_str = ""
+    if starts and ends:
+        length_wd = working_days_between(min(starts), max(ends), holidays)
+        length_str = f" (length {length_wd}wd)"
+
+    chain = " → ".join(cp)
+    ok(f"critical-path {args.program} — {chain}{length_str}")
+    return 0
+
+
 def cmd_task_delete(args: argparse.Namespace) -> int:
     from gantt_lib import sheets as gs_sheets
     from gantt_lib.refs import referencing_tasks
@@ -814,6 +871,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_recalc.add_argument("program", help="program short name")
     p_recalc.set_defaults(func=cmd_recalc)
+
+    p_cp = sub.add_parser(
+        "critical-path",
+        help="compute the critical path and bold those task rows",
+    )
+    p_cp.add_argument("program", help="program short name")
+    p_cp.set_defaults(func=cmd_critical_path)
 
     return parser
 
