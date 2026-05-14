@@ -13,7 +13,13 @@ from __future__ import annotations
 
 import pytest
 
-from gantt_lib.dsl import Predecessor, PredecessorParseError, parse_predecessors
+from gantt_lib.dsl import (
+    Predecessor,
+    PredecessorParseError,
+    format_predecessor,
+    format_predecessors,
+    parse_predecessors,
+)
 
 
 def test_empty_string_yields_no_predecessors():
@@ -100,3 +106,36 @@ def test_predecessor_is_hashable_for_dedup():
     p1 = Predecessor(id="1.2", rel="FS", lag=3)
     p2 = Predecessor(id="1.2", rel="FS", lag=3)
     assert {p1, p2} == {p1}
+
+
+# ---------- format_predecessor / format_predecessors ----------
+
+def test_format_predecessor_omits_zero_lag():
+    assert format_predecessor(Predecessor(id="1.2", rel="FS", lag=0)) == "1.2FS"
+
+
+def test_format_predecessor_positive_lag():
+    assert format_predecessor(Predecessor(id="1.2", rel="FS", lag=3)) == "1.2FS+3"
+
+
+def test_format_predecessor_negative_lag():
+    assert format_predecessor(Predecessor(id="1.2", rel="FS", lag=-2)) == "1.2FS-2"
+
+
+@pytest.mark.parametrize("rel", ["FS", "SS", "FF", "SF"])
+def test_format_predecessor_round_trip(rel):
+    original = f"1.2{rel}+5"
+    parsed = parse_predecessors(original)
+    assert format_predecessors(parsed) == original
+
+
+def test_format_predecessors_empty_list():
+    assert format_predecessors([]) == ""
+
+
+def test_format_predecessors_multiple():
+    preds = [
+        Predecessor(id="1.2", rel="FS", lag=3),
+        Predecessor(id="1.3", rel="SS", lag=0),
+    ]
+    assert format_predecessors(preds) == "1.2FS+3, 1.3SS"

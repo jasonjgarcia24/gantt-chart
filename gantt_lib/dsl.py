@@ -46,6 +46,20 @@ class Predecessor:
     lag: int = 0
 
 
+def format_predecessor(p: Predecessor) -> str:
+    """Inverse of parse_predecessors for a single entry. Omits lag when zero
+    so 'FS+0' canonicalizes to 'FS'."""
+    if p.lag == 0:
+        return f"{p.id}{p.rel}"
+    sign = "+" if p.lag > 0 else ""
+    return f"{p.id}{p.rel}{sign}{p.lag}"
+
+
+def format_predecessors(preds: list[Predecessor]) -> str:
+    """Inverse of parse_predecessors for a list. ', '-separated."""
+    return ", ".join(format_predecessor(p) for p in preds)
+
+
 def parse_predecessors(s: str) -> list[Predecessor]:
     s = s.strip()
     if not s:
