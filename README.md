@@ -19,7 +19,8 @@ Modeled on the `daily-ops` bundle pattern: bundle-local venv, user state under
 | 3. First user-visible program | `program new`, `task add/update/delete` | ✅ shipped |
 | 4. Cascade wiring | `recalc` (reads tab, cascades, writes back) | ✅ shipped |
 | 5. Critical path + shift | `critical-path`, `shift` | ✅ shipped |
-| 6. Skill surface | `SKILL.md`, `/gantt` slash command | ✅ shipped (activate via the symlinks below) |
+| 6. Skill surface | `SKILL.md`, `/gantt` slash command | ✅ shipped |
+| 7. Plugin lifecycle | `.claude-plugin/`, `/gantt:init`, `--remove` | ✅ shipped (canonical install dance below) |
 
 Test suite: 179 tests across `model`, `dsl`, `dates`, `cascade`, `refs`, `schema`, `sheets_helpers`, `auto_status`, `critical_path`.
 
@@ -28,35 +29,166 @@ for the full task breakdown.
 
 ---
 
-## First-time setup
+## Quick Start
+
+> **Before you start:** this plugin needs a Google OAuth Desktop client (Sheets + Drive scopes) to authenticate against your Google account. You can set that up during `/gantt:init` (Gate 6 walks you through Cloud Console), or pre-create it from [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials → OAuth client ID → Desktop app, and drop `credentials.json` into `~/.config/gantt/` first. Python 3.10+ also required.
+
+<details>
+<summary><b>Claude Code — Marketplace (recommended)</b></summary>
+
+```
+/plugin marketplace add jasonjgarcia24/gantt-chart
+/plugin install gantt@jason-gantt
+/reload-plugins
+/gantt:init
+```
+
+The first two add the marketplace and install the plugin; the third reloads the current session so the new commands are callable without restarting Claude Code; the fourth runs first-run setup (8 gates: Python, CLI on PATH, short-form alias, Claude Code permissions, bundle venv, OAuth credentials, workbook bootstrap, final read-back). `/gantt:init` is idempotent — re-running it only fixes what's missing.
+
+To pull a newer version later: **uninstall first then reinstall** (Claude Code's `/plugin install` skips already-installed plugins, so a vanilla rerun won't pick up upstream changes):
+
+```
+/plugin marketplace update jason-gantt
+/plugin uninstall gantt@jason-gantt
+/plugin install gantt@jason-gantt
+/reload-plugins
+/gantt:init
+```
+
+> **Two ways to invoke `gantt`.** `/gantt:gantt` is the plugin-namespaced form (always available after install). `/gantt` is the short form — during `/gantt:init`, a user-level symlink is installed at `~/.claude/commands/gantt.md` → the plugin's `commands/gantt.md`, so both resolve to the same file with no drift. (Init itself stays namespaced — `/gantt:init` only — because Claude Code has a built-in `/init` command for CLAUDE.md initialization that the short form would collide with.)
+
+> **SSH errors?** The marketplace clones repos via SSH. If you don't have SSH keys set up on GitHub, either [add your SSH key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account) or switch to HTTPS for fetches only:
+> ```bash
+> git config --global url."https://github.com/".insteadOf "git@github.com:"
+> ```
+
+</details>
+
+<details>
+<summary><b>Uninstall</b></summary>
+
+Three steps. The first cleans up the user-level shims init created; the next two remove the plugin and marketplace.
+
+```
+/gantt:init --remove
+/plugin uninstall gantt@jason-gantt
+/plugin marketplace remove jason-gantt
+```
+
+**`--remove` removes** (only if they exist and point at gantt-chart paths):
+
+- `~/.local/bin/gantt` — the CLI on PATH
+- `~/.claude/commands/gantt.md` — the short-form `/gantt` alias
+
+**`--remove` does NOT touch** (manage these yourself if you want full cleanup):
+
+- `~/.config/gantt/credentials.json` — OAuth client (sensitive — keeping it means no new Cloud Console setup if you reinstall)
+- `~/.config/gantt/token.json` — OAuth refresh token (sensitive)
+- `~/.config/gantt/config.json` — Sheet id + URL — deleting forces re-bootstrap (creates a NEW workbook; old one stays in your Drive)
+- `~/.claude/settings.json` — has `gantt` permissions from `--init` Gate 4
+- Your portfolio workbook in Google Drive — `--remove` never touches Drive content
+- The bundle-local `.venv` — gets removed when `/plugin uninstall` runs
+
+For full cleanup, manually:
 
 ```bash
-# 1. Create the bundle-local venv and install dependencies.
+rm -rf ~/.config/gantt
+# Edit ~/.claude/settings.json to remove the gantt permissions block (back up first)
+# Delete the portfolio workbook from Google Drive UI if unwanted
+```
+
+</details>
+
+<details>
+<summary><b>Claude Code — Local / development clone</b></summary>
+
+Useful if you want to edit the plugin in place and see changes without reinstalling.
+
+```bash
+git clone https://github.com/jasonjgarcia24/gantt-chart.git ~/code/gantt-chart
+claude --plugin-dir ~/code/gantt-chart
+```
+
+</details>
+
+<details>
+<summary><b>Manual install (no plugin marketplace)</b></summary>
+
+Bolt-on to an existing Claude Code config without the marketplace:
+
+```bash
+git clone https://github.com/jasonjgarcia24/gantt-chart.git ~/gantt-chart
+cd ~/gantt-chart
+
+# Bundle-local venv + dependencies
 ./gantt setup
 
-# 2. Authorize Google Sheets access and create the portfolio workbook.
-./gantt bootstrap
-# → opens a browser for OAuth consent
-# → creates "Jason — Program Portfolio" with a seeded _Config tab
-# → saves sheet_id + URL to ~/.config/gantt/config.json
+# Skill — symlink the skill directory so Claude can discover it
+mkdir -p ~/.claude/skills
+ln -sf "$PWD/skills/gantt" ~/.claude/skills/gantt
 
-# 3. (Optional but recommended) Symlink the CLI onto PATH so you can run
-# bare `gantt …` from anywhere instead of `./gantt …`.
-ln -s ~/Documents/gantt-chart/gantt ~/.local/bin/gantt
+# Slash command — short form so /gantt routes to NL handling
+mkdir -p ~/.claude/commands
+ln -sf "$PWD/commands/gantt.md" ~/.claude/commands/gantt.md
 
-# 4. (Optional) Activate the SKILL + slash command for Claude. Until the
-# claude-tool manifest ships, this is a manual symlink:
-ln -s ~/Documents/gantt-chart/SKILL.md          ~/.claude/skills/gantt/SKILL.md
-ln -s ~/Documents/gantt-chart/commands/gantt.md ~/.claude/commands/gantt.md
+# CLI on PATH
+mkdir -p ~/.local/bin
+chmod +x "$PWD/gantt"
+ln -sf "$PWD/gantt" ~/.local/bin/gantt
 ```
+
+Merge the plugin's permissions into `~/.claude/settings.json`:
+
+```bash
+cp ~/.claude/settings.json ~/.claude/settings.json.bak
+jq -s '
+  (.[0].permissions.allow // []) as $a
+  | (.[1].permissions.allow // []) as $b
+  | .[0] * .[1]
+  | .permissions.allow = ($a + $b | unique)
+' ~/.claude/settings.json settings.fragment.json \
+  > /tmp/settings.json && mv /tmp/settings.json ~/.claude/settings.json
+```
+
+(The naive `jq '.[0] * .[1]'` form replaces arrays rather than concatenating them, which silently drops any existing `permissions.allow` entries. The form above concatenates and dedupes.)
+
+Then complete OAuth + workbook bootstrap:
+
+```bash
+gantt bootstrap
+```
+
+</details>
+
+<details>
+<summary><b>OAuth setup (required once, any install method)</b></summary>
+
+Needed because `gantt bootstrap` writes to a Google Sheet on your behalf.
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → create a new project (e.g. `gantt`) or reuse an existing one.
+2. APIs & Services → Library → enable **Google Sheets API** AND **Google Drive API**.
+3. APIs & Services → OAuth consent screen → External → add yourself as a Test user → add scopes `https://www.googleapis.com/auth/spreadsheets` and `https://www.googleapis.com/auth/drive.file`.
+4. APIs & Services → Credentials → Create Credentials → OAuth client ID → **Desktop app** → download the JSON.
+5. Drop into place:
+   ```bash
+   mkdir -p ~/.config/gantt
+   mv ~/Downloads/credentials.json ~/.config/gantt/credentials.json
+   ```
+6. Run the bootstrap to create the workbook (opens a browser for first-time consent):
+   ```bash
+   gantt bootstrap
+   ```
 
 After bootstrap, `gantt info` reports the sheet URL, OAuth state, and venv status.
 
 State lives in `~/.config/gantt/`:
-- `credentials.json` — OAuth 2.0 Desktop client (seeded one-time from
-  `~/Documents/ai-project-model/credentials.json` if present)
+- `credentials.json` — OAuth 2.0 Desktop client (sensitive)
 - `token.json` — refresh token after first consent (0600)
 - `config.json` — sheet id + URL after bootstrap
+
+Override the credentials path with `GANTT_CREDS=/path/to/credentials.json` if you want to keep them elsewhere.
+
+</details>
 
 ---
 
@@ -160,11 +292,19 @@ gantt-chart/
 ├── gantt                       # CLI entry point (executable, with venv self-exec trampoline)
 ├── requirements.txt
 ├── pyproject.toml              # pytest config
+├── settings.fragment.json      # Bash(gantt:*) permission for /gantt:init Gate 4
 ├── README.md
+├── LICENSE
 ├── .gitignore
-├── SKILL.md                    # Claude skill — natural-language → CLI routing
+├── .claude-plugin/
+│   ├── plugin.json             # plugin manifest (name=gantt)
+│   └── marketplace.json        # marketplace manifest (name=jason-gantt)
+├── skills/
+│   └── gantt/
+│       └── SKILL.md            # Claude skill — natural-language → CLI routing
 ├── commands/
-│   └── gantt.md                # /gantt slash command
+│   ├── gantt.md                # /gantt:gantt + short-form /gantt slash command
+│   └── init.md                 # /gantt:init (Setup + Cleanup modes)
 ├── gantt_lib/                  # pure-Python domain logic + Sheets I/O wrapper
 │   ├── model.py                # Task, Program, Status, next_wbs_id, wbs_sort_key
 │   ├── dsl.py                  # predecessor DSL parser + formatter
