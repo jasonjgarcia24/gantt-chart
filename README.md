@@ -269,6 +269,55 @@ WBS ids auto-assign:
 # CPM forward+backward pass; bolds critical-path rows; prints the chain.
 ```
 
+### Baseline tracking
+
+A baseline freezes the current `(start, end, duration, predecessors)` of every
+task as the plan-of-record. Once captured, `gantt baseline show` reports per-task
+slip and a delta on critical-path duration — the headline number leadership
+asks for ("are we on track vs. what we committed to?").
+
+Snapshots live in a workbook-level `_Baselines` tab (auto-created on first
+snapshot). The tab is append-only — every snapshot is preserved as audit
+history. The *active baseline* for any task is the most recent row.
+
+```bash
+# Freeze TPM90's current dates as the baseline of record.
+./gantt baseline snapshot --program=TPM90
+# → gantt: baseline snapshot — TPM90, 12 tasks, 2026-05-14 ✓
+# Optional flags: --label="Q2 plan freeze", --actor=jason.garcia
+# --all snapshots every program in the workbook in one pass.
+
+# Re-running on a program that already has a baseline refuses (exit 1):
+./gantt baseline snapshot --program=TPM90
+# → gantt: baseline already exists for TPM90 (last snapshot 2026-05-14).
+#          Use --rebaseline to replace the slip-comparison anchor.
+#          History is always preserved. ✗
+
+# Move the slip anchor to today's plan; old snapshots stay in _Baselines.
+./gantt baseline snapshot --program=TPM90 --rebaseline
+
+# Summary block + top 10 slippers by abs end-slip (default).
+./gantt baseline show --program=TPM90
+# Other detail modes:
+#   --top=5             top N slippers
+#   --slipping-only     every task with end-slip > 0
+#   --all               every baselined task, sorted by WBS
+#   --milestones-only   filter detail to milestones (combinable)
+#   --critical-path-only  filter detail to critical-path tasks (combinable)
+# Portfolio rollup — summary per program, no detail tables:
+./gantt baseline show --all-programs
+
+# Destructive — refuses without --force; deletes every _Baselines row for
+# the named program. The next snapshot starts a new history.
+./gantt baseline clear --program=TPM90 --force
+```
+
+`gantt info` also reports baseline coverage per program after the local
+diagnostic block (sheet URL, paths, venv) — `K/N tasks baselined, last
+snapshot YYYY-MM-DD by <actor>` or `baseline none`.
+
+Full spec: [`docs/specs/baseline-tracking.md`](docs/specs/baseline-tracking.md).
+
 ### Predecessor DSL
 
 Compact form: `<id><relation><signed_lag>?`, comma-separated.
@@ -305,7 +354,7 @@ gantt-chart/
 ├── commands/
 │   ├── gantt.md                # /gantt:gantt + short-form /gantt slash command
 │   └── init.md                 # /gantt:init (Setup + Cleanup modes)
-├── gantt_lib/                  # pure-Python domain logic + Sheets I/O wrapper
+├── gantt_lib/                  # pure-Python domain logic + Sheets I/O wrappers
 │   ├── model.py                # Task, Program, Status, next_wbs_id, wbs_sort_key
 │   ├── dsl.py                  # predecessor DSL parser + formatter
 │   ├── dates.py                # add_working_days, working_days_between
@@ -314,7 +363,10 @@ gantt-chart/
 │   ├── auto_status.py          # derive Status from %complete + dates + preds
 │   ├── critical_path.py        # CPM forward+backward, slack, critical path
 │   ├── schema.py               # column layout, ARRAYFORMULA, CF/DV/border requests
-│   └── sheets.py               # thin gspread wrapper for program tabs
+│   ├── sheets.py               # thin gspread wrapper for program tabs
+│   ├── baseline.py             # BaselineRow, slip math, summary, baseline-CP
+│   ├── baseline_io.py          # gspread wrapper for the _Baselines tab
+│   └── baseline_cmds.py        # cmd_baseline_{snapshot,show,clear} handlers
 ├── tests/
 │   ├── test_model.py
 │   ├── test_dsl.py
@@ -325,10 +377,20 @@ gantt-chart/
 │   ├── test_sheets_helpers.py
 │   ├── test_auto_status.py
 │   ├── test_critical_path.py
-│   └── fixtures/programs.py    # shared Program factories
+│   ├── test_baseline.py        # pure-logic tests for baseline.py
+│   ├── test_baseline_io.py     # row parse/serialize tests
+│   ├── test_baseline_cmds.py   # handler tests via FakeSpreadsheet
+│   └── fixtures/
+│       ├── programs.py         # shared Program factories
+│       ├── baselines.py        # BaselineRow factory
+│       └── fake_workbook.py    # in-memory gspread fakes for handler tests
 └── docs/
     ├── ideas/gantt-skill-v0.5.md
-    └── plans/v0.5-backlog.md
+    ├── specs/baseline-tracking.md   # Phase 1 spec for baseline tracking
+    └── plans/
+        ├── v0.5-backlog.md
+        ├── baseline-tracking-plan.md
+        └── baseline-tracking-tasks.md
 ```
 
 ---
@@ -336,7 +398,7 @@ gantt-chart/
 ## Development
 
 ```bash
-# Run the full suite (currently 179 tests):
+# Run the full suite (currently 246 tests):
 .venv/bin/python3 -m pytest tests/ -v
 
 # One module:
