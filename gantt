@@ -928,6 +928,28 @@ def cmd_baseline_clear(args: argparse.Namespace) -> int:
     return baseline_cmds.cmd_baseline_clear(args, _open_workbook())
 
 
+# ---------- deck generation ----------
+# Same pattern as baseline: handler logic in gantt_lib/deck_cmds.py for
+# testability. Wrapper opens workbook + builds Slides/Drive services from
+# the same OAuth creds that gspread uses.
+
+def cmd_deck(args: argparse.Namespace) -> int:
+    import gspread
+    from gantt_lib import deck_cmds
+    from gantt_lib.deck import slides_io
+
+    creds = get_credentials()
+    cfg = read_config()
+    if "sheet_id" not in cfg:
+        die("no sheet bootstrapped yet. Run: gantt bootstrap")
+
+    gs_client = gspread.authorize(creds)
+    ss = gs_client.open_by_key(cfg["sheet_id"])
+    slides_svc = slides_io.slides_service(creds)
+    drive_svc = slides_io.drive_service(creds)
+    return deck_cmds.cmd_deck(args, ss, slides_svc, drive_svc)
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     cfg = read_config()
     print(f"gantt: bundle  {BUNDLE_DIR}")
@@ -1191,6 +1213,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="confirm the destructive delete (no undo)",
     )
     p_bc.set_defaults(func=cmd_baseline_clear)
+
+    # ---------- deck generation ----------
+
+    p_deck = sub.add_parser(
+        "deck",
+        help="generate audience-targeted slide decks (tactical or strategic)",
+    )
+    p_deck.add_argument(
+        "--audience", required=True, choices=["tactical", "strategic"],
+        help="target audience: tactical (Engineering/ICs) or strategic (EM/TPM/Leadership)",
+    )
+    g_deck_target = p_deck.add_mutually_exclusive_group()
+    g_deck_target.add_argument(
+        "--program", help="single-program scope (required for tactical, optional for strategic)",
+    )
+    g_deck_target.add_argument(
+        "--all", action="store_true",
+        help="tactical: fan out one section per program",
+    )
+    g_deck_target.add_argument(
+        "--all-programs", action="store_true",
+        help="strategic: portfolio rollup (default if no flag)",
+    )
+    p_deck.set_defaults(func=cmd_deck)
 
     return parser
 
