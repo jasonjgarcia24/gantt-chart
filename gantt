@@ -1000,6 +1000,48 @@ def cmd_baseline_snapshot(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_baseline_clear(args: argparse.Namespace) -> int:
+    """Delete every `_Baselines` row matching one or more programs.
+
+    Refuses without `--force`. Destructive on purpose — `_Baselines` IS the
+    audit log; there's no log behind the log. If you cleared by accident, the
+    next snapshot establishes a new baseline (no historical comparison until
+    a new anchor accumulates).
+    """
+    from gantt_lib import baseline_io
+
+    ss = _open_workbook()
+    programs = _resolve_target_programs(ss, args)
+    if not programs:
+        ok("baseline cleared — no programs in workbook")
+        return 0
+
+    all_rows = baseline_io.read_baselines(ss)
+    rows_to_remove = [r for r in all_rows if r.program in set(programs)]
+
+    if not args.force:
+        n = len(rows_to_remove)
+        scope = (
+            ", ".join(programs)
+            if len(programs) <= 3
+            else f"{len(programs)} programs"
+        )
+        plural = "s" if n != 1 else ""
+        print(
+            f"gantt: baseline clear refused — pass --force "
+            f"(this deletes {n} historical snapshot{plural} from {scope}) ✗",
+            file=sys.stderr,
+        )
+        return 1
+
+    baseline_io.delete_baselines_for_programs(ss, programs)
+    for program in programs:
+        n = sum(1 for r in rows_to_remove if r.program == program)
+        plural = "s" if n != 1 else ""
+        ok(f"baseline cleared — {program}, {n} historical snapshot{plural} removed")
+    return 0
+
+
 def _slip_header_chars() -> tuple[str, str]:
     """Return ('Δstart', 'Δend') when stdout can render Unicode, else ('dStart', 'dEnd')."""
     enc = (sys.stdout.encoding or "").lower()
@@ -1452,6 +1494,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="restrict the detail table to critical-path tasks",
     )
     p_bv.set_defaults(func=cmd_baseline_show)
+
+    p_bc = p_baseline_sub.add_parser(
+        "clear",
+        help="delete _Baselines rows for one or all programs (refuses without --force)",
+    )
+    g_bc_target = p_bc.add_mutually_exclusive_group(required=True)
+    g_bc_target.add_argument("--program", help="program short name to clear")
+    g_bc_target.add_argument(
+        "--all", action="store_true", help="clear baselines for every program",
+    )
+    p_bc.add_argument(
+        "--force", action="store_true",
+        help="confirm the destructive delete (no undo)",
+    )
+    p_bc.set_defaults(func=cmd_baseline_clear)
 
     return parser
 
