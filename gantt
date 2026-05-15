@@ -1000,6 +1000,249 @@ def cmd_baseline_snapshot(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _slip_header_chars() -> tuple[str, str]:
+    """Return ('Δstart', 'Δend') when stdout can render Unicode, else ('dStart', 'dEnd')."""
+    enc = (sys.stdout.encoding or "").lower()
+    if "utf" in enc:
+        return ("Δstart", "Δend")
+    return ("dStart", "dEnd")
+
+
+def _fmt_slip_cell(s: int | None) -> str:
+    """Format a signed-int slip for the detail table; '—' for None, '+N' for positive."""
+    if s is None:
+        return "—"
+    if s > 0:
+        return f"+{s}"
+    return str(s)
+
+
+def _truncate(name: str, n: int = 30) -> str:
+    """Truncate long task names with an ellipsis so the table stays scannable."""
+    return name if len(name) <= n + 1 else name[:n] + "…"
+
+
+def _print_summary_block(summary) -> None:
+    """Render the always-shown summary block (4 lines per spec, fewer if no baseline)."""
+    if summary.last_baseline_date:
+        actor = summary.last_baseline_actor or "unknown"
+        print(
+            f"{summary.program} — last baseline "
+            f"{summary.last_baseline_date.isoformat()} "
+            f"({summary.days_since_baseline}d ago, by {actor})"
+        )
+    else:
+        print(f"{summary.program} — no baseline yet")
+
+    task_parts = [
+        f"{summary.total_tasks} total",
+        f"{summary.tasks_done} done",
+        f"{summary.tasks_in_progress} in progress",
+        f"{summary.tasks_not_started} not started",
+    ]
+    if summary.tasks_blocked:
+        task_parts.append(f"{summary.tasks_blocked} blocked")
+    if summary.tasks_at_risk:
+        task_parts.append(f"{summary.tasks_at_risk} at risk")
+    print("Tasks:    " + " | ".join(task_parts))
+
+    if summary.max_end_slip is not None:
+        print(
+            f"Slip:     {summary.max_end_slip:+d}d max end-slip | "
+            f"{summary.mean_end_slip:+.1f}d mean | "
+            f"{summary.slipping_count} slipping | "
+            f"{summary.ahead_count} ahead | "
+            f"{summary.on_baseline_count} on-baseline"
+        )
+
+    if summary.tasks_not_baselined > 0:
+        print(f"          {summary.tasks_not_baselined} tasks not yet baselined")
+
+    if summary.current_cp_days is not None:
+        if summary.baseline_cp_days is not None and summary.cp_delta is not None:
+            sign = "+" if summary.cp_delta >= 0 else ""
+            print(
+                f"Critical: {summary.baseline_cp_days}d → "
+                f"{summary.current_cp_days}d ({sign}{summary.cp_delta}d)"
+            )
+        else:
+            print(f"Critical: {summary.current_cp_days}d (no baseline)")
+
+
+def _build_detail_rows(
+    program_obj, actives, args, cp_ids: set[str]
+) -> list[list[str]]:
+    """Compute the detail table rows (no header) per the active flags.
+
+    Decision tree:
+      1. Apply --milestones-only / --critical-path-only filters first.
+      2. Compute (Δstart, Δend) per task.
+      3. If --all → sort by WBS, return everything filtered.
+      4. Elif --slipping-only → filter to Δend > 0, sort by abs Δend desc.
+      5. Else (default or --top=N) → sort by abs Δend desc, take top N. If no
+         task has Δend > 0, return empty (caller prints the "all tracking" line).
+
+    Tasks without an active baseline are excluded from the detail (they're
+    summarized in the summary block as "K tasks not yet baselined").
+    """
+    from gantt_lib.baseline import slip_days
+    from gantt_lib.model import wbs_sort_key
+
+    candidates = []
+    for t in program_obj.tasks:
+        b = actives.get(t.id)
+        if b is None:
+            continue
+        if args.milestones_only and not t.milestone:
+            continue
+        if args.critical_path_only and t.id not in cp_ids:
+            continue
+        candidates.append((t, b))
+
+    enriched = [
+        (t, b, slip_days(t.start, b.baseline_start), slip_days(t.end, b.baseline_end))
+        for t, b in candidates
+    ]
+
+    if args.all:
+        enriched.sort(key=lambda x: wbs_sort_key(x[0].id))
+    elif args.slipping_only:
+        enriched = [x for x in enriched if x[3] is not None and x[3] > 0]
+        enriched.sort(key=lambda x: abs(x[3]), reverse=True)
+    else:
+        if not any(x[3] is not None and x[3] > 0 for x in enriched):
+            return []
+        enriched.sort(
+            key=lambda x: abs(x[3]) if x[3] is not None else -1, reverse=True,
+        )
+        enriched = enriched[: args.top]
+
+    rows: list[list[str]] = []
+    for t, b, dstart, dend in enriched:
+        rows.append([
+            t.id,
+            _truncate(t.name),
+            b.baseline_start.isoformat() if b.baseline_start else "—",
+            t.start.isoformat() if t.start else "—",
+            _fmt_slip_cell(dstart),
+            b.baseline_end.isoformat() if b.baseline_end else "—",
+            t.end.isoformat() if t.end else "—",
+            _fmt_slip_cell(dend),
+        ])
+    return rows
+
+
+def _print_table(headers: list[str], rows: list[list[str]]) -> None:
+    """Render headers + rows as a column-aligned plain-text table (2-space gutter)."""
+    if not rows:
+        return
+    cols = list(zip(headers, *rows))
+    widths = [max(len(str(cell)) for cell in col) for col in cols]
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    print(fmt.format(*headers))
+    for row in rows:
+        print(fmt.format(*[str(c) for c in row]))
+
+
+def cmd_baseline_show(args: argparse.Namespace) -> int:
+    """Print baseline-vs-current summary + detail table for one or all programs.
+
+    Default detail = top 10 slippers by abs end-slip; flags adjust that. The
+    result line counts always reflect the *whole program*, not the filtered
+    detail view, so downstream parsers (e.g. the deck generator) get a stable
+    number regardless of which flags were used.
+    """
+    from datetime import date as _date
+
+    from gantt_lib import baseline_io, schema, sheets as gs_sheets
+    from gantt_lib.baseline import active_baselines, compute_summary
+    from gantt_lib.cascade import (
+        CycleError, MissingPredecessorError, UnanchoredError, cascade,
+    )
+    from gantt_lib.critical_path import critical_path
+    from gantt_lib.model import Program
+
+    ss = _open_workbook()
+    programs = _resolve_target_programs(ss, args, all_attr="all_programs")
+    if not programs:
+        ok("baseline show — no programs in workbook")
+        return 0
+
+    all_rows = baseline_io.read_baselines(ss)
+    today = _date.today()
+    config_ws = ss.worksheet("_Config")
+    holidays = schema.read_holidays_from_config(config_ws)
+    is_portfolio = getattr(args, "all_programs", False)
+
+    overall_max_slip: int | None = None
+    worst_program: str | None = None
+
+    for i, program in enumerate(programs):
+        try:
+            ws = ss.worksheet(schema.program_tab_name(program))
+        except Exception:
+            fail(f"baseline show — {program} not found")
+            continue
+
+        tasks = gs_sheets.read_program_tasks(ws)
+        program_obj = Program(name=program, tasks=tasks, holidays=holidays)
+        try:
+            cascade(program_obj)
+        except (CycleError, UnanchoredError, MissingPredecessorError) as e:
+            print(f"gantt: cascade failed for {program} — {e}", file=sys.stderr)
+            continue
+
+        summary = compute_summary(program, program_obj, all_rows, today)
+
+        if summary.max_end_slip is not None:
+            if overall_max_slip is None or summary.max_end_slip > overall_max_slip:
+                overall_max_slip = summary.max_end_slip
+                worst_program = program
+
+        if i > 0:
+            print()
+        _print_summary_block(summary)
+
+        if not is_portfolio:
+            actives = active_baselines(all_rows, program)
+            cp_ids: set[str] = set()
+            if args.critical_path_only:
+                cp_ids = set(critical_path(program_obj))
+            detail_rows = _build_detail_rows(program_obj, actives, args, cp_ids)
+            print()
+            if detail_rows:
+                start_h, end_h = _slip_header_chars()
+                _print_table(
+                    ["wbs", "name", "baseline_start", "current_start", start_h,
+                     "baseline_end", "current_end", end_h],
+                    detail_rows,
+                )
+            elif summary.tasks_baselined > 0 and summary.slipping_count == 0:
+                print("All tasks tracking to baseline ✓")
+            slip_str = (
+                f"max slip {summary.max_end_slip:+d}d"
+                if summary.max_end_slip is not None
+                else "no slip data"
+            )
+            ok(
+                f"baseline show — {program}, {summary.total_tasks} tasks, "
+                f"{slip_str}, {summary.ahead_count} ahead"
+            )
+
+    if is_portfolio:
+        n = len(programs)
+        plural = "s" if n != 1 else ""
+        if overall_max_slip is not None:
+            ok(
+                f"baseline show — {n} program{plural}, "
+                f"max slip +{overall_max_slip}d in {worst_program}"
+            )
+        else:
+            ok(f"baseline show — {n} program{plural}, no slip data")
+
+    return 0
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     cfg = read_config()
     print(f"gantt: bundle  {BUNDLE_DIR}")
@@ -1177,6 +1420,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="overrides $USER as snapshot author",
     )
     p_bs.set_defaults(func=cmd_baseline_snapshot)
+
+    p_bv = p_baseline_sub.add_parser(
+        "show",
+        help="print summary block + detail table comparing current vs baseline",
+    )
+    g_bv_target = p_bv.add_mutually_exclusive_group(required=True)
+    g_bv_target.add_argument("--program", help="program short name to show")
+    g_bv_target.add_argument(
+        "--all-programs", action="store_true",
+        help="summary block per program, no detail tables",
+    )
+    p_bv.add_argument(
+        "--top", type=int, default=10,
+        help="show top N slippers by abs end-slip (default 10)",
+    )
+    p_bv.add_argument(
+        "--all", action="store_true",
+        help="show every baselined task, sorted by WBS",
+    )
+    p_bv.add_argument(
+        "--slipping-only", action="store_true",
+        help="show only tasks with end-slip > 0",
+    )
+    p_bv.add_argument(
+        "--milestones-only", action="store_true",
+        help="restrict the detail table to milestone tasks",
+    )
+    p_bv.add_argument(
+        "--critical-path-only", action="store_true",
+        help="restrict the detail table to critical-path tasks",
+    )
+    p_bv.set_defaults(func=cmd_baseline_show)
 
     return parser
 
