@@ -1299,6 +1299,45 @@ def cmd_info(args: argparse.Namespace) -> int:
     print(f"  sys.prefix:  {sys.prefix}")
     if not cfg:
         print("gantt: no sheet bootstrapped yet. Run: gantt bootstrap")
+        return 0
+
+    # Best-effort program + baseline coverage. Network/OAuth failures are
+    # silent — info should remain useful as a local-state diagnostic even
+    # when the workbook is unreachable.
+    try:
+        from gantt_lib import baseline_io, schema
+        from gantt_lib import sheets as gs_sheets
+        from gantt_lib.baseline import active_baselines
+
+        ss = _open_workbook()
+        program_names = baseline_io.list_program_names(ss)
+        if not program_names:
+            return 0
+        all_baselines = baseline_io.read_baselines(ss)
+        print()
+        print("Programs:")
+        for name in program_names:
+            try:
+                ws = ss.worksheet(schema.program_tab_name(name))
+                current_tasks = gs_sheets.read_program_tasks(ws)
+                actives = active_baselines(all_baselines, name)
+            except Exception:
+                print(f"  {name}: (read failed)")
+                continue
+            n = len(current_tasks)
+            if not actives:
+                print(f"  {name}: baseline none, {n} task{'s' if n != 1 else ''}")
+                continue
+            k = sum(1 for t in current_tasks if t.id in actives)
+            program_rows = [r for r in all_baselines if r.program == name]
+            last_row = max(program_rows, key=lambda r: r.snapshot_date)
+            actor = last_row.snapshot_actor or "unknown"
+            print(
+                f"  {name}: baseline {k}/{n} tasks baselined, "
+                f"last snapshot {last_row.snapshot_date.isoformat()} by {actor}"
+            )
+    except Exception:
+        pass
     return 0
 
 
