@@ -133,4 +133,26 @@ class FakeSpreadsheet:
         self._sheets[ws.title] = ws
 
     def batch_update(self, body: dict):
+        """Record the request body and apply any side-effecting requests we model.
+
+        Currently honors `deleteDimension` for ROWS so the baseline-clear path
+        works under tests. Other request types (formatting, mergeCells, etc.)
+        are recorded but not applied — production code that depends on those
+        having actually been applied should grow a more capable fake when needed.
+        """
         self.batch_updates.append(body)
+        for req in body.get("requests", []):
+            dd = req.get("deleteDimension")
+            if not dd:
+                continue
+            r = dd.get("range", {})
+            if r.get("dimension") != "ROWS":
+                continue
+            sheet_id = r.get("sheetId")
+            target = next((w for w in self._sheets.values() if w.id == sheet_id), None)
+            if target is None:
+                continue
+            start = r.get("startIndex", 0)
+            end = r.get("endIndex", start + 1)
+            for row_1based in range(end, start, -1):
+                target.delete_rows(row_1based)

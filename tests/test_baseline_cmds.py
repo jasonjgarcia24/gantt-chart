@@ -385,6 +385,28 @@ def test_clear_force_with_all_programs_clears_everything(capsys):
     assert _tpm_rows_in(ss, "Q3Launch") == 0
 
 
+def test_clear_uses_single_batch_update_for_large_programs(capsys):
+    """Regression for docs/issues/baseline-clear-quota.md.
+
+    Per-row delete_rows() was tripping the Sheets 60/min/user write quota on
+    programs with many baseline rows. The fix packs all deletions into one
+    batch_update — N row deletes → 1 quota unit. This test pins the structural
+    invariant: regardless of how many rows match, exactly one batch_update fires.
+    """
+    rows = [_make_baseline(program="TPM90", wbs=str(i)) for i in range(1, 101)]
+    ss = _make_workbook(programs={"TPM90": []}, baselines=rows)
+    pre_batch_count = len(ss.batch_updates)
+    rc = baseline_cmds.cmd_baseline_clear(
+        _make_args(program="TPM90", force=True), ss,
+    )
+    assert rc == 0
+    assert _tpm_rows_in(ss, "TPM90") == 0  # all 100 deleted
+    assert len(ss.batch_updates) - pre_batch_count == 1, (
+        f"Expected exactly 1 batch_update for 100 row deletes, "
+        f"got {len(ss.batch_updates) - pre_batch_count}"
+    )
+
+
 # ---------- malformed-row tolerance via the integration boundary ----------
 
 def test_show_skips_malformed_baseline_row_with_warning(capsys):

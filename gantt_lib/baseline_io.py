@@ -216,10 +216,15 @@ def program_tab_exists(ss, program: str) -> bool:
 def delete_baselines_for_programs(ss, programs: list[str]) -> int:
     """Delete every `_Baselines` row whose program column matches. Returns count deleted.
 
-    Safe when the tab is missing (returns 0). Deletes from bottom-to-top so
-    earlier deletions don't shift the row indices of later targets. For a small
-    Phase 1 history (~thousands of rows), per-row delete is acceptable; if this
-    becomes slow, switch to a single batched deleteDimension request.
+    Safe when the tab is missing (returns 0). Packs all deletions into a single
+    Spreadsheet.batch_update — N row deletes cost 1 Sheets write quota unit
+    (vs. N units for the previous per-row implementation, which tripped the
+    60/min/user limit on programs with ~80+ baseline rows). See
+    `docs/issues/baseline-clear-quota.md` for the incident that motivated this.
+
+    Within the batch, requests run sequentially; deleting row 3 first would
+    shift row 5 → row 4 and break subsequent index references. Sorting
+    descending keeps indices stable across the whole batch.
     """
     try:
         ws = ss.worksheet(BASELINE_TAB)
@@ -233,6 +238,18 @@ def delete_baselines_for_programs(ss, programs: list[str]) -> int:
     ]
     if not rows_to_delete:
         return 0
-    for r in reversed(rows_to_delete):
-        ws.delete_rows(r)
+    requests = [
+        {
+            "deleteDimension": {
+                "range": {
+                    "sheetId": ws.id,
+                    "dimension": "ROWS",
+                    "startIndex": r - 1,
+                    "endIndex": r,
+                },
+            },
+        }
+        for r in sorted(rows_to_delete, reverse=True)
+    ]
+    ss.batch_update({"requests": requests})
     return len(rows_to_delete)
