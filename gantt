@@ -1003,6 +1003,19 @@ def cmd_info(args: argparse.Namespace) -> int:
             )
     except Exception:
         pass
+
+    # Decks: read straight from config (no network) — surface the yearly
+    # file URLs so the user can bookmark / open them. Skipped silently when
+    # the decks block is absent (no decks generated yet for this year).
+    decks = cfg.get("decks", {})
+    if decks:
+        print()
+        print("Decks:")
+        for key in sorted(decks.keys()):
+            rec = decks[key]
+            audience, _, year = key.rpartition("_")
+            label = f"{audience} {year}" if audience else key
+            print(f"  {label}: {rec.get('url', '(no url)')}")
     return 0
 
 
