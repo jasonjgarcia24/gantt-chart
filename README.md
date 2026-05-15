@@ -318,6 +318,59 @@ snapshot YYYY-MM-DD by <actor>` or `baseline none`.
 
 Full spec: [`docs/specs/baseline-tracking.md`](docs/specs/baseline-tracking.md).
 
+### Deck generation
+
+Audience-targeted Google Slides decks generated from the workbook + active
+baselines. Two distinct cognitive frames:
+
+- **Tactical** (Engineering / ICs) — *what's on my plate this week, who am
+  I blocked by, what just shipped*. Per-program detail; embeds a
+  matplotlib gantt-zoom for the next 30 days.
+- **Strategic** (EM / TPM / Leadership) — *are we hitting milestones,
+  what slipped, where's the risk*. Portfolio rollup; tables + a top-risks
+  bullet list.
+
+Each invocation appends a date-stamped **section** (1 divider + 5 content
+slides) to a yearly file — one URL per audience per year, with built-in
+audit history. Yearly files are stored under
+`~/.config/gantt/config.json` in the new `decks:` block.
+
+```bash
+# Tactical — per-program (one of --program OR --all required)
+./gantt deck --audience=tactical --program=TPM90
+./gantt deck --audience=tactical --all                # one section per program
+
+# Strategic — defaults to portfolio rollup
+./gantt deck --audience=strategic
+./gantt deck --audience=strategic --program=TPM90     # single-program leadership view
+./gantt deck --audience=strategic --all-programs      # explicit form of default
+
+# All commands return:
+#   gantt: deck appended — <url>#slide=id.<divider_id> ✓
+# Click the URL — it deep-links straight to the new section divider.
+```
+
+**OAuth scope upgrade**: the first deck command after install triggers an
+extra OAuth re-consent flow because the Slides API needs the
+`presentations` scope (Phase 1 only had Sheets + drive.file). gantt prints
+a clear message before the browser opens — same Google account, ~30s.
+
+**Embedded chart images**: the tactical gantt-zoom slide embeds a PNG
+that gantt uploads to your Drive root with public-link permissions
+(`anyone with link, view-only`). Anyone with the (unguessable) URL can
+view the chart. Files persist forever; manual cleanup via Drive search
+for `gantt-deck-image-` prefix.
+
+`gantt info` lists the yearly deck URLs after the Programs block:
+
+```
+Decks:
+  strategic 2026: https://docs.google.com/presentation/d/...
+  tactical 2026:  https://docs.google.com/presentation/d/...
+```
+
+Full spec: [`docs/specs/deck-generation.md`](docs/specs/deck-generation.md).
+
 ### Predecessor DSL
 
 Compact form: `<id><relation><signed_lag>?`, comma-separated.
@@ -366,7 +419,13 @@ gantt-chart/
 │   ├── sheets.py               # thin gspread wrapper for program tabs
 │   ├── baseline.py             # BaselineRow, slip math, summary, baseline-CP
 │   ├── baseline_io.py          # gspread wrapper for the _Baselines tab
-│   └── baseline_cmds.py        # cmd_baseline_{snapshot,show,clear} handlers
+│   ├── baseline_cmds.py        # cmd_baseline_{snapshot,show,clear} handlers
+│   ├── deck/                   # Phase 2 — deck generation package
+│   │   ├── data.py             # 10 selection functions (5 tactical + 5 strategic)
+│   │   ├── charts.py           # matplotlib gantt-zoom PNG renderer
+│   │   ├── slides_io.py        # Slides + Drive API wrappers + decks config
+│   │   └── templates.py        # slide template builders + section orchestrators
+│   └── deck_cmds.py            # cmd_deck handler (audiences + program scoping)
 ├── tests/
 │   ├── test_model.py
 │   ├── test_dsl.py
@@ -380,17 +439,28 @@ gantt-chart/
 │   ├── test_baseline.py        # pure-logic tests for baseline.py
 │   ├── test_baseline_io.py     # row parse/serialize tests
 │   ├── test_baseline_cmds.py   # handler tests via FakeSpreadsheet
+│   ├── test_deck_data.py       # 10 selection functions
+│   ├── test_deck_charts.py     # matplotlib PNG smoke tests
+│   ├── test_deck_slides_io.py  # config helpers (file-only)
+│   ├── test_deck_templates.py  # request shape + object-id uniqueness
+│   ├── test_deck_cmds.py       # handler tests via FakeSlides+FakeDrive
 │   └── fixtures/
 │       ├── programs.py         # shared Program factories
 │       ├── baselines.py        # BaselineRow factory
-│       └── fake_workbook.py    # in-memory gspread fakes for handler tests
+│       ├── fake_workbook.py    # in-memory gspread fakes
+│       └── fake_slides.py      # Slides + Drive API fakes
 └── docs/
     ├── ideas/gantt-skill-v0.5.md
-    ├── specs/baseline-tracking.md   # Phase 1 spec for baseline tracking
+    ├── issues/                  # incident write-ups (e.g. baseline-clear-quota.md)
+    ├── specs/
+    │   ├── baseline-tracking.md
+    │   └── deck-generation.md
     └── plans/
         ├── v0.5-backlog.md
         ├── baseline-tracking-plan.md
-        └── baseline-tracking-tasks.md
+        ├── baseline-tracking-tasks.md
+        ├── deck-generation-plan.md
+        └── deck-generation-tasks.md
 ```
 
 ---
@@ -398,7 +468,7 @@ gantt-chart/
 ## Development
 
 ```bash
-# Run the full suite (currently 246 tests):
+# Run the full suite (currently 325 tests):
 .venv/bin/python3 -m pytest tests/ -v
 
 # One module:
