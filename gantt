@@ -42,6 +42,7 @@ SEED_CREDS_PATH = Path.home() / "Documents/ai-project-model/credentials.json"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/presentations",
 ]
 SHEET_TITLE = "Jason — Program Portfolio"
 
@@ -132,6 +133,24 @@ def get_credentials():
         try:
             creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
         except Exception:
+            creds = None
+
+    # Scope-upgrade detection: the refresh-token flow can't widen scopes —
+    # if SCOPES has grown since the token was issued (e.g. Phase 2 added the
+    # presentations scope), the next API call would fail with a confusing
+    # 403. Force a clean re-consent so the user knows why the browser pops.
+    if creds is not None:
+        stored_scopes = set(creds.scopes or [])
+        required_scopes = set(SCOPES)
+        if not required_scopes.issubset(stored_scopes):
+            missing = sorted(required_scopes - stored_scopes)
+            print(
+                f"gantt: OAuth scope upgrade required (added: {', '.join(missing)}).\n"
+                f"       Browser opens for re-consent in 3s — same Google account.",
+                file=sys.stderr,
+            )
+            import time
+            time.sleep(3)
             creds = None
 
     if not creds or not creds.valid:
