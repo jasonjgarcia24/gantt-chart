@@ -77,6 +77,15 @@ def ok(line: str) -> None:
     print(f"gantt: {line} ✓")
 
 
+def fail(line: str) -> None:
+    """Print a spec-shaped failure line ('gantt: ... ✗') to stderr.
+
+    Unlike die(), does not call sys.exit() — caller decides whether to continue
+    (e.g., --all mode tolerates per-program failure and continues to the next).
+    """
+    print(f"gantt: {line} ✗", file=sys.stderr)
+
+
 def todo(subcommand: str) -> int:
     print(f"gantt: {subcommand} — not implemented yet")
     return 0
@@ -889,6 +898,108 @@ def cmd_task_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- baseline tracking ----------
+
+def _resolve_target_programs(
+    ss, args: argparse.Namespace, *, all_attr: str = "all"
+) -> list[str]:
+    """Return the program names to operate on. Argparse handles the xor; we just
+    expand --all and validate that --program=X exists.
+
+    `all_attr` accommodates both `--all` (snapshot/clear) and `--all-programs`
+    (show) — the underlying argparse attribute name differs.
+    """
+    from gantt_lib import baseline_io
+
+    program = getattr(args, "program", None)
+    do_all = getattr(args, all_attr, False)
+    if program:
+        if not baseline_io.program_tab_exists(ss, program):
+            die(
+                f"program {program!r} not found. "
+                f"Run: gantt program new {program}"
+            )
+        return [program]
+    return baseline_io.list_program_names(ss)
+
+
+def cmd_baseline_snapshot(args: argparse.Namespace) -> int:
+    """Freeze current dates as the baseline for one or all programs.
+
+    Refuses per-program if an active baseline already exists, unless
+    `--rebaseline` is set. History is appended to `_Baselines` regardless;
+    the refusal is about moving the slip-comparison anchor, not about
+    preserving snapshots.
+    """
+    from datetime import date as _date
+
+    from gantt_lib import baseline_io, sheets as gs_sheets
+    from gantt_lib import schema
+    from gantt_lib.baseline import BaselineRow, active_baselines
+
+    ss = _open_workbook()
+    programs = _resolve_target_programs(ss, args)
+
+    all_rows = baseline_io.read_baselines(ss)
+    today = _date.today()
+    actor = args.actor or os.environ.get("USER", "unknown")
+    label = args.label or ""
+
+    exit_code = 0
+    for program in programs:
+        try:
+            ws = ss.worksheet(schema.program_tab_name(program))
+        except Exception:
+            fail(f"baseline snapshot — {program} not found")
+            exit_code = 1
+            continue
+
+        tasks = gs_sheets.read_program_tasks(ws)
+        if not tasks:
+            print(f"gantt: baseline snapshot — {program}, 0 tasks (skipped) ⚠")
+            continue
+
+        existing_active = active_baselines(all_rows, program)
+        is_rebaseline = bool(existing_active)
+        if is_rebaseline and not args.rebaseline:
+            program_rows = [r for r in all_rows if r.program == program]
+            last_snap = max(r.snapshot_date for r in program_rows)
+            print(
+                f"gantt: baseline already exists for {program} "
+                f"(last snapshot {last_snap.isoformat()}).\n"
+                f"       Use --rebaseline to replace the slip-comparison anchor.\n"
+                f"       History is always preserved. ✗",
+                file=sys.stderr,
+            )
+            exit_code = 1
+            continue
+
+        new_rows = [
+            BaselineRow(
+                program=program,
+                wbs=t.id,
+                task_name=t.name,
+                snapshot_date=today,
+                baseline_start=t.start,
+                baseline_end=t.end,
+                baseline_duration=t.duration,
+                baseline_predecessors=t.predecessors,
+                snapshot_label=label,
+                snapshot_actor=actor,
+            )
+            for t in tasks
+        ]
+        baseline_io.append_baselines(ss, new_rows)
+        # Refresh the in-memory rows so a second program snapshotted in the
+        # same --all run sees the updated state when checking active baselines.
+        all_rows.extend(new_rows)
+
+        verb = "rebaselined" if is_rebaseline else "snapshot"
+        ok(f"baseline {verb} — {program}, {len(tasks)} tasks, {today.isoformat()}")
+
+    return exit_code
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     cfg = read_config()
     print(f"gantt: bundle  {BUNDLE_DIR}")
@@ -1032,6 +1143,40 @@ def build_parser() -> argparse.ArgumentParser:
     p_shift.add_argument("id", help="WBS id of the task to shift")
     p_shift.add_argument("delta", help="signed working-day delta, e.g. +5d, -3d, 0d")
     p_shift.set_defaults(func=cmd_shift)
+
+    # ---------- baseline tracking ----------
+
+    p_baseline = sub.add_parser(
+        "baseline",
+        help="snapshot, show, or clear plan-of-record baselines for slip tracking",
+    )
+    p_baseline_sub = p_baseline.add_subparsers(
+        dest="baseline_cmd", metavar="<baseline-cmd>",
+    )
+    p_baseline_sub.required = True
+
+    p_bs = p_baseline_sub.add_parser(
+        "snapshot",
+        help="freeze current dates as the baseline (creates _Baselines tab if missing)",
+    )
+    g_bs_target = p_bs.add_mutually_exclusive_group(required=True)
+    g_bs_target.add_argument("--program", help="program short name to snapshot")
+    g_bs_target.add_argument(
+        "--all", action="store_true", help="snapshot every program",
+    )
+    p_bs.add_argument(
+        "--rebaseline", action="store_true",
+        help="replace the slip-comparison anchor (history is always preserved)",
+    )
+    p_bs.add_argument(
+        "--label", default="",
+        help='optional human label, e.g. "Q2 plan freeze"',
+    )
+    p_bs.add_argument(
+        "--actor", default=None,
+        help="overrides $USER as snapshot author",
+    )
+    p_bs.set_defaults(func=cmd_baseline_snapshot)
 
     return parser
 
