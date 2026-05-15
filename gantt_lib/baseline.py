@@ -138,7 +138,9 @@ def cp_duration_days(program: Program) -> Optional[int]:
 
 
 def reconstruct_baseline_program(
-    program_name: str, baseline_rows: Iterable[BaselineRow]
+    program_name: str,
+    baseline_rows: Iterable[BaselineRow],
+    holidays: Optional[set[date]] = None,
 ) -> Program:
     """Build a synthetic Program from a set of active baseline rows.
 
@@ -150,10 +152,14 @@ def reconstruct_baseline_program(
     the dead reference. The baseline plan is a historical artifact; we read it
     as it was, not as it might have been.
 
-    Holidays are reconstructed as the empty set. The current program's holidays
-    are used for the *current* CP computation; this means a baseline CP that
-    spanned a holiday added since baseline will read very slightly longer than
-    it "really" was. Acceptable for Phase 1; documented limitation.
+    `holidays` should be the current program's holiday set — the backward-pass
+    in critical_path() uses working-day math, and we want consistent
+    holiday-skipping between baseline and current (otherwise CP membership
+    diverges and the delta becomes meaningless). Defaults to empty for
+    callers that genuinely have no holiday context (e.g., synthetic tests).
+
+    Limitation: if holidays *changed* between baseline and current, we can't
+    recover the historical set — this method assumes them stable.
     """
     rows = list(baseline_rows)
     valid_wbs = {r.wbs for r in rows}
@@ -170,7 +176,7 @@ def reconstruct_baseline_program(
             duration=r.baseline_duration,
             predecessors=format_predecessors(preds_kept),
         ))
-    return Program(name=program_name, tasks=tasks, holidays=set())
+    return Program(name=program_name, tasks=tasks, holidays=holidays or set())
 
 
 def _count_status(tasks: list[Task], status_value: str) -> int:
@@ -243,10 +249,14 @@ def compute_summary(
         ahead_count = 0
         on_baseline_count = 0
 
-    # Critical-path delta
+    # Critical-path delta — pass current holidays into the baseline reconstruction
+    # so working-day math stays consistent across baseline and current. Otherwise
+    # backward-pass slack diverges and CP membership flips → meaningless delta.
     current_cp = _safe_cp(current_program)
     if actives:
-        baseline_program = reconstruct_baseline_program(program_name, actives.values())
+        baseline_program = reconstruct_baseline_program(
+            program_name, actives.values(), holidays=current_program.holidays,
+        )
         baseline_cp = _safe_cp(baseline_program)
     else:
         baseline_cp = None

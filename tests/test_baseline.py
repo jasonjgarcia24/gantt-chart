@@ -393,6 +393,40 @@ def test_compute_summary_last_baseline_picks_most_recent():
     assert s.days_since_baseline == 13
 
 
+def test_compute_summary_cp_delta_zero_when_holidays_present_and_match():
+    """Regression: with holidays in current, baseline reconstruction must use
+    the same holidays so backward-pass slack agrees and CP membership matches.
+
+    Caught live: a TPM90 baseline taken right after rebaseline showed
+    Critical: 15d → 67d (+52d) despite zero per-task slip — because the
+    baseline program was reconstructed with holidays=set() while current used
+    real US federal holidays, forcing different CP membership.
+    """
+    holidays = {date(2026, 5, 25)}  # Memorial Day mid-program
+    p = Program(
+        name="hol",
+        tasks=[
+            Task(id="1", level=1, name="A", duration=3, start=date(2026, 5, 11)),
+            Task(id="2", level=1, name="B", duration=2, predecessors="1FS"),
+            Task(id="3", level=1, name="C", duration=8, predecessors="2FS"),
+        ],
+        holidays=holidays,
+    )
+    cascade(p)
+    rows = [
+        make_baseline_row(
+            program="hol", wbs=t.id, task_name=t.name,
+            baseline_start=t.start, baseline_end=t.end,
+            baseline_duration=t.duration,
+            baseline_predecessors=t.predecessors,
+        )
+        for t in p.tasks
+    ]
+    s = compute_summary("hol", p, rows, today=date(2026, 5, 14))
+    assert s.cp_delta == 0
+    assert s.baseline_cp_days == s.current_cp_days
+
+
 def test_compute_summary_cp_delta_when_current_extended():
     """Baseline CP = 8d (linear chain, dur=3+2+1). Current grows task 3 dur to 6 → CP delta positive.
 
