@@ -5,8 +5,12 @@ Gantt charts in Google Sheets. The Sheet is the artifact PMs share; the CLI
 does the dependency math (topological sort, working-days arithmetic, FS/SS/FF/SF
 relations, critical path) and writes the results back.
 
-Modeled on the `daily-ops` bundle pattern: bundle-local venv, user state under
+Modeled on the `daily-ops` bundle pattern: skill-local venv, user state under
 `~/.config/gantt/`, OAuth-backed Sheets writes, one verified result line per command.
+
+The CLI is **bundled inside the Claude skill** at `skills/gantt/scripts/gantt`
+— there is no `gantt` on `$PATH`. You drive it through the `/gantt` slash
+command; the skill resolves the bundled binary and invokes it for you.
 
 ---
 
@@ -22,7 +26,7 @@ Modeled on the `daily-ops` bundle pattern: bundle-local venv, user state under
 | 6. Skill surface | `SKILL.md`, `/gantt` slash command | ✅ shipped |
 | 7. Plugin lifecycle | `.claude-plugin/`, `/gantt:init`, `--remove` | ✅ shipped (canonical install dance below) |
 
-Test suite: 179 tests across `model`, `dsl`, `dates`, `cascade`, `refs`, `schema`, `sheets_helpers`, `auto_status`, `critical_path`.
+Test suite: 358 tests across `model`, `dsl`, `dates`, `cascade`, `refs`, `schema`, `sheets_helpers`, `auto_status`, `critical_path`, baseline tracking, deck generation, narrative LLM client, and `.env` loader.
 
 See `docs/ideas/gantt-skill-v0.5.md` for the v0.5 charter and `docs/plans/v0.5-backlog.md`
 for the full task breakdown.
@@ -43,7 +47,7 @@ for the full task breakdown.
 /gantt:init
 ```
 
-The first two add the marketplace and install the plugin; the third reloads the current session so the new commands are callable without restarting Claude Code; the fourth runs first-run setup (8 gates: Python, CLI on PATH, short-form alias, Claude Code permissions, bundle venv, OAuth credentials, workbook bootstrap, final read-back). `/gantt:init` is idempotent — re-running it only fixes what's missing.
+The first two add the marketplace and install the plugin; the third reloads the current session so the new commands are callable without restarting Claude Code; the fourth runs first-run setup (7 gates: Python, short-form alias, Claude Code permissions, skill-local venv, OAuth credentials, workbook bootstrap, final read-back). `/gantt:init` is idempotent — re-running it only fixes what's missing.
 
 To pull a newer version later: **uninstall first then reinstall** (Claude Code's `/plugin install` skips already-installed plugins, so a vanilla rerun won't pick up upstream changes):
 
@@ -77,17 +81,17 @@ Three steps. The first cleans up the user-level shims init created; the next two
 
 **`--remove` removes** (only if they exist and point at gantt-chart paths):
 
-- `~/.local/bin/gantt` — the CLI on PATH
 - `~/.claude/commands/gantt.md` — the short-form `/gantt` alias
+- `~/.local/bin/gantt` — legacy CLI symlink from pre-self-contained-skill installs (no longer created by setup; cleaned up if found)
 
 **`--remove` does NOT touch** (manage these yourself if you want full cleanup):
 
 - `~/.config/gantt/credentials.json` — OAuth client (sensitive — keeping it means no new Cloud Console setup if you reinstall)
 - `~/.config/gantt/token.json` — OAuth refresh token (sensitive)
 - `~/.config/gantt/config.json` — Sheet id + URL — deleting forces re-bootstrap (creates a NEW workbook; old one stays in your Drive)
-- `~/.claude/settings.json` — has `gantt` permissions from `--init` Gate 4
+- `~/.claude/settings.json` — has `gantt` permissions from `--init` Gate 3
 - Your portfolio workbook in Google Drive — `--remove` never touches Drive content
-- The bundle-local `.venv` — gets removed when `/plugin uninstall` runs
+- The skill-local `.venv` at `<plugin>/skills/gantt/.venv` — gets removed when `/plugin uninstall` runs
 
 For full cleanup, manually:
 
@@ -120,8 +124,8 @@ Bolt-on to an existing Claude Code config without the marketplace:
 git clone https://github.com/jasonjgarcia24/gantt-chart.git ~/gantt-chart
 cd ~/gantt-chart
 
-# Bundle-local venv + dependencies
-./gantt setup
+# Skill-local venv + dependencies
+./skills/gantt/scripts/gantt setup
 
 # Skill — symlink the skill directory so Claude can discover it
 mkdir -p ~/.claude/skills
@@ -130,12 +134,10 @@ ln -sf "$PWD/skills/gantt" ~/.claude/skills/gantt
 # Slash command — short form so /gantt routes to NL handling
 mkdir -p ~/.claude/commands
 ln -sf "$PWD/commands/gantt.md" ~/.claude/commands/gantt.md
-
-# CLI on PATH
-mkdir -p ~/.local/bin
-chmod +x "$PWD/gantt"
-ln -sf "$PWD/gantt" ~/.local/bin/gantt
 ```
+
+The CLI lives inside the skill bundle and isn't installed on `$PATH` — drive
+it through `/gantt` or `/gantt:gantt` from inside Claude Code.
 
 Merge the plugin's permissions into `~/.claude/settings.json`:
 
@@ -163,23 +165,20 @@ gantt bootstrap
 <details>
 <summary><b>OAuth setup (required once, any install method)</b></summary>
 
-Needed because `gantt bootstrap` writes to a Google Sheet on your behalf.
+Needed because the skill's `bootstrap` step writes to a Google Sheet on your behalf.
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com) → create a new project (e.g. `gantt`) or reuse an existing one.
-2. APIs & Services → Library → enable **Google Sheets API** AND **Google Drive API**.
-3. APIs & Services → OAuth consent screen → External → add yourself as a Test user → add scopes `https://www.googleapis.com/auth/spreadsheets` and `https://www.googleapis.com/auth/drive.file`.
+2. APIs & Services → Library → enable **Google Sheets API**, **Google Drive API**, AND **Google Slides API** (Slides is needed for deck generation).
+3. APIs & Services → OAuth consent screen → External → add yourself as a Test user → add scopes `https://www.googleapis.com/auth/spreadsheets`, `https://www.googleapis.com/auth/drive.file`, and `https://www.googleapis.com/auth/presentations`.
 4. APIs & Services → Credentials → Create Credentials → OAuth client ID → **Desktop app** → download the JSON.
 5. Drop into place:
    ```bash
    mkdir -p ~/.config/gantt
    mv ~/Downloads/credentials.json ~/.config/gantt/credentials.json
    ```
-6. Run the bootstrap to create the workbook (opens a browser for first-time consent):
-   ```bash
-   gantt bootstrap
-   ```
+6. Run `/gantt:init` from Claude Code. Gate 6 will trigger the bootstrap (opens a browser for first-time consent) and create the workbook.
 
-After bootstrap, `gantt info` reports the sheet URL, OAuth state, and venv status.
+After bootstrap, `/gantt info` (or `/gantt show me the workbook URL`) reports the sheet URL, OAuth state, and venv status.
 
 State lives in `~/.config/gantt/`:
 - `credentials.json` — OAuth 2.0 Desktop client (sensitive)
@@ -193,6 +192,13 @@ Override the credentials path with `GANTT_CREDS=/path/to/credentials.json` if yo
 ---
 
 ## Usage (commands shipped so far)
+
+> **You drive these through the `/gantt` slash command, not from a shell.**
+> The CLI examples below (`./gantt program new TPM90` etc.) are the literal
+> commands the skill constructs and runs against the bundled binary at
+> `skills/gantt/scripts/gantt`. They're documented here so you can reason
+> about what the skill is doing — but you wouldn't type them yourself.
+> Talk to `/gantt` in natural language and it translates.
 
 ### Create a program
 
@@ -391,41 +397,46 @@ Multiple predecessors: `"1.2FS+3, 1.3SS"`. Whitespace tolerated everywhere.
 
 ```
 gantt-chart/
-├── gantt                       # CLI entry point (executable, with venv self-exec trampoline)
-├── requirements.txt
 ├── pyproject.toml              # pytest config
-├── settings.fragment.json      # Bash(gantt:*) permission for /gantt:init Gate 4
+├── conftest.py                 # adds skills/gantt/scripts to sys.path for tests
+├── settings.fragment.json      # Bash(*/skills/gantt/scripts/gantt:*) for /gantt:init Gate 3
 ├── README.md
 ├── LICENSE
 ├── .gitignore
 ├── .claude-plugin/
 │   ├── plugin.json             # plugin manifest (name=gantt)
 │   └── marketplace.json        # marketplace manifest (name=jason-gantt)
-├── skills/
-│   └── gantt/
-│       └── SKILL.md            # Claude skill — natural-language → CLI routing
 ├── commands/
 │   ├── gantt.md                # /gantt:gantt + short-form /gantt slash command
 │   └── init.md                 # /gantt:init (Setup + Cleanup modes)
-├── gantt_lib/                  # pure-Python domain logic + Sheets I/O wrappers
-│   ├── model.py                # Task, Program, Status, next_wbs_id, wbs_sort_key
-│   ├── dsl.py                  # predecessor DSL parser + formatter
-│   ├── dates.py                # add_working_days, working_days_between
-│   ├── cascade.py              # topo sort + dependency cascade
-│   ├── refs.py                 # predecessor-graph utilities (used by delete)
-│   ├── auto_status.py          # derive Status from %complete + dates + preds
-│   ├── critical_path.py        # CPM forward+backward, slack, critical path
-│   ├── schema.py               # column layout, ARRAYFORMULA, CF/DV/border requests
-│   ├── sheets.py               # thin gspread wrapper for program tabs
-│   ├── baseline.py             # BaselineRow, slip math, summary, baseline-CP
-│   ├── baseline_io.py          # gspread wrapper for the _Baselines tab
-│   ├── baseline_cmds.py        # cmd_baseline_{snapshot,show,clear} handlers
-│   ├── deck/                   # Phase 2 — deck generation package
-│   │   ├── data.py             # 10 selection functions (5 tactical + 5 strategic)
-│   │   ├── charts.py           # matplotlib gantt-zoom PNG renderer
-│   │   ├── slides_io.py        # Slides + Drive API wrappers + decks config
-│   │   └── templates.py        # slide template builders + section orchestrators
-│   └── deck_cmds.py            # cmd_deck handler (audiences + program scoping)
+├── skills/
+│   └── gantt/                  # SELF-CONTAINED SKILL BUNDLE — drop the whole folder anywhere
+│       ├── SKILL.md            # Claude skill — natural-language → bundled CLI routing
+│       ├── .venv/              # skill-local venv (created by `gantt setup`; gitignored)
+│       └── scripts/
+│           ├── gantt           # CLI entry point (executable, with venv self-exec trampoline)
+│           ├── requirements.txt
+│           └── gantt_lib/      # pure-Python domain logic + Sheets I/O wrappers
+│               ├── model.py            # Task, Program, Status, next_wbs_id, wbs_sort_key
+│               ├── dsl.py              # predecessor DSL parser + formatter
+│               ├── dates.py            # add_working_days, working_days_between
+│               ├── cascade.py          # topo sort + dependency cascade
+│               ├── refs.py             # predecessor-graph utilities (used by delete)
+│               ├── auto_status.py      # derive Status from %complete + dates + preds
+│               ├── critical_path.py    # CPM forward+backward, slack, critical path
+│               ├── schema.py           # column layout, ARRAYFORMULA, CF/DV/border requests
+│               ├── sheets.py           # thin gspread wrapper for program tabs
+│               ├── env_file.py         # ~/.config/gantt/.env loader (ANTHROPIC_API_KEY etc.)
+│               ├── baseline.py         # BaselineRow, slip math, summary, baseline-CP
+│               ├── baseline_io.py      # gspread wrapper for the _Baselines tab
+│               ├── baseline_cmds.py    # cmd_baseline_{snapshot,show,clear} handlers
+│               ├── deck/               # Phase 2/3 — deck generation package
+│               │   ├── data.py         # 10 selection functions (5 tactical + 5 strategic)
+│               │   ├── charts.py       # matplotlib gantt-zoom PNG renderer
+│               │   ├── slides_io.py    # Slides + Drive API wrappers + decks config
+│               │   ├── templates.py    # slide template builders + section orchestrators
+│               │   └── narrative.py    # Anthropic SDK section summaries (Haiku default)
+│               └── deck_cmds.py        # cmd_deck handler (audiences + program scoping)
 ├── tests/
 │   ├── test_model.py
 │   ├── test_dsl.py
@@ -467,20 +478,24 @@ gantt-chart/
 
 ## Development
 
+The venv lives inside the skill bundle at `skills/gantt/.venv/`. The
+top-level `conftest.py` prepends `skills/gantt/scripts/` to `sys.path` so
+tests at the repo root can `import gantt_lib.*` without being skill-aware.
+
 ```bash
-# Run the full suite (currently 325 tests):
-.venv/bin/python3 -m pytest tests/ -v
+# Run the full suite (currently 358 tests):
+skills/gantt/.venv/bin/python3 -m pytest tests/ -v
 
 # One module:
-.venv/bin/python3 -m pytest tests/test_cascade.py -v
+skills/gantt/.venv/bin/python3 -m pytest tests/test_cascade.py -v
 
 # Coverage:
-.venv/bin/python3 -m pytest tests/ --cov=gantt_lib
+skills/gantt/.venv/bin/python3 -m pytest tests/ --cov=gantt_lib
 ```
 
-Domain logic in `gantt_lib/` is pure Python — no Sheets dependency, no
-network. The CLI and `gantt_lib/sheets.py` are the only places that touch
-gspread.
+Domain logic in `skills/gantt/scripts/gantt_lib/` is pure Python — no Sheets
+dependency, no network. The CLI and `gantt_lib/sheets.py` are the only
+places that touch gspread.
 
 ---
 

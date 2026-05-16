@@ -1,18 +1,21 @@
 ---
 name: gantt
-description: Operate Jason's program portfolio workbook in Google Sheets via the `gantt` CLI at ~/.local/bin/gantt. USE THIS SKILL whenever the user mentions any of — program plans, program tabs (named P_TPM90, P_Q3Launch, etc.), task progress updates ("OK2DC is 50% done", "task 1.2 is complete", "mark X done"), task scheduling or duration changes ("the eyepiece fab task should be 8 days not 5"), dependencies / predecessors (FS / SS / FF / SF, "depends on", "after task 2"), shifting tasks ("push the launch milestone out 2 weeks", "pull task 5 in by 3 days"), recalculating dates after sheet edits ("I edited a few rows, recalc TPM90"), critical-path queries on the workbook ("what's the critical path in TPM90", "what tasks are blocked"), creating a new program ("create a new program called Q3Launch"), milestones in the workbook, or ANY task referenced by WBS id (e.g. 1, 5.2, OK2DC). Jason names programs with short tokens like TPM90, Q3Launch — when those appear, this skill applies. Capabilities: add / update / delete tasks; cascade dates via topo sort + working-days math; auto-derive Status from %complete + dependencies; shift tasks ±N working days; compute critical path with bold highlighting; sort rows by WBS id. Does NOT handle: gantt visualizations in matplotlib / plotly / Python libraries (those use the libraries directly); metaphorical critical-path / milestone language (hiring, standups, meetings); Asana / Jira / Linear / Trello tasks; calendar scheduling (standups, meetings, milestone-review events); generic PM-vocabulary questions ("what does FS mean"); arbitrary Google Sheets unrelated to the portfolio workbook.
+description: Operate Jason's program portfolio workbook in Google Sheets via the skill-bundled `gantt` CLI at scripts/gantt (under this skill's base directory). USE THIS SKILL whenever the user mentions any of — program plans, program tabs (named P_TPM90, P_Q3Launch, etc.), task progress updates ("OK2DC is 50% done", "task 1.2 is complete", "mark X done"), task scheduling or duration changes ("the eyepiece fab task should be 8 days not 5"), dependencies / predecessors (FS / SS / FF / SF, "depends on", "after task 2"), shifting tasks ("push the launch milestone out 2 weeks", "pull task 5 in by 3 days"), recalculating dates after sheet edits ("I edited a few rows, recalc TPM90"), critical-path queries on the workbook ("what's the critical path in TPM90", "what tasks are blocked"), creating a new program ("create a new program called Q3Launch"), milestones in the workbook, or ANY task referenced by WBS id (e.g. 1, 5.2, OK2DC). Jason names programs with short tokens like TPM90, Q3Launch — when those appear, this skill applies. Capabilities: add / update / delete tasks; cascade dates via topo sort + working-days math; auto-derive Status from %complete + dependencies; shift tasks ±N working days; compute critical path with bold highlighting; sort rows by WBS id. Does NOT handle: gantt visualizations in matplotlib / plotly / Python libraries (those use the libraries directly); metaphorical critical-path / milestone language (hiring, standups, meetings); Asana / Jira / Linear / Trello tasks; calendar scheduling (standups, meetings, milestone-review events); generic PM-vocabulary questions ("what does FS mean"); arbitrary Google Sheets unrelated to the portfolio workbook.
 tools: Bash
 ---
 
 You manage Jason's program plans in a Google Sheets workbook called
-"Jason — Program Portfolio". You drive a CLI at `~/.local/bin/gantt` (a
-symlink to `~/Documents/gantt-chart/gantt`) that reads/writes one tab per
-program (`P_TPM90`, etc.). Your Bash permission allowlist is `Bash(gantt:*)`.
+"Jason — Program Portfolio". You drive a CLI bundled inside this skill at
+`<skill-base-dir>/scripts/gantt` that reads/writes one tab per program
+(`P_TPM90`, etc.). The skill's base directory is provided at activation time
+— resolve it once, then invoke the script with the absolute path. There is
+no `gantt` on `$PATH`; the CLI is skill-local on purpose so the bundle stays
+fully self-contained.
 
 ## Subcommand reference
 
 ### Lifecycle (first run / status)
-- `gantt setup` — create bundle-local venv at `~/Documents/gantt-chart/.venv/` and install dependencies. Required on a fresh machine. `--force` rebuilds.
+- `gantt setup` — create skill-local venv at `<skill-base-dir>/.venv/` and install dependencies. Required on a fresh machine. `--force` rebuilds.
 - `gantt bootstrap` — OAuth browser consent + create the portfolio workbook. Required before any other write. `--force` creates a new sheet (old one not deleted).
 - `gantt info` — read-only: print sheet URL, config paths, OAuth token + venv state.
 
@@ -36,9 +39,10 @@ program (`P_TPM90`, etc.). Your Bash permission allowlist is `Bash(gantt:*)`.
     `gantt shift TPM90 2 -- -2d`
 - `gantt critical-path <program>` — compute critical path via CPM forward+backward pass; bold those rows in cols A-M. Print the chain.
 
-## Execution model: you run `gantt` yourself
+## Execution model: you run the skill-bundled `gantt` yourself
 
-- Always invoke as bare `gantt` (the bundle is symlinked to `~/.local/bin/gantt`). Never use an absolute path — the Bash allowlist matches the literal first token.
+- Resolve the skill base directory from the activation context (Claude Code provides it). The entrypoint is `<skill-base-dir>/scripts/gantt`. Invoke it via Bash with that absolute path — there is intentionally no `gantt` on `$PATH`.
+- Throughout this document, command references like `gantt info` or `gantt task add ...` are shorthand for `<skill-base-dir>/scripts/gantt info`, etc. Construct the absolute path before invoking.
 - Run read-only commands (`gantt info`) without preamble.
 - For `bootstrap`, tell the user one line **before** you run it: "About to create a new Google Sheet and open a browser for OAuth consent (first run only)." Then run `gantt bootstrap`.
 - For mutations (`task add/update/delete`, `shift`), the CLI auto-cascades and prints TWO result lines (the mutation + the recalc summary). Surface BOTH lines as-is at the top of your response.
