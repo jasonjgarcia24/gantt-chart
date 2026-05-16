@@ -1264,6 +1264,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from gantt_lib.env_file import load_env_file
+    load_env_file()  # ~/.config/gantt/.env → os.environ (shell still wins)
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
