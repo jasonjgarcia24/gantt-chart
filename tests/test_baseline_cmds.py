@@ -101,6 +101,34 @@ def test_snapshot_writes_rows_for_single_program(capsys):
     assert _tpm_rows_in(ss, "TPM90") == 2
 
 
+def test_snapshot_runs_cascade_before_capturing_baseline_end(capsys):
+    """Snapshot must cascade so baseline reflects POR dates, not stale sheet values.
+
+    Reproduces the Tahoma/TRR bug: the sheet's End column was stale (cascade
+    would compute a different value), and the snapshot froze the stale value
+    into the baseline. Downstream views (decks, baseline show) then showed
+    phantom slip when fresh cascade output diverged from the locked baseline.
+    """
+    tasks = [
+        Task(id="1", level=1, name="A", duration=3,
+             start=date(2026, 5, 11), end=date(2026, 5, 13)),
+        # Sheet End is stale: cascade from 1FS + duration 5 gives 2026-05-20,
+        # but the sheet has 2026-06-30 (e.g., user shortened duration but
+        # didn't `gantt recalc`).
+        Task(id="2", level=1, name="B", duration=5, predecessors="1FS",
+             start=date(2026, 5, 14), end=date(2026, 6, 30)),
+    ]
+    ss = _make_workbook(programs={"TPM90": tasks})
+
+    baseline_cmds.cmd_baseline_snapshot(_make_args(program="TPM90"), ss)
+
+    rows = ss.worksheet("_Baselines").rows[1:]
+    task_2_row = next(r for r in rows if r[1] == "2")
+    # column 5 = baseline_end
+    assert task_2_row[5] == "2026-05-20", \
+        f"expected cascade output 2026-05-20, got stale {task_2_row[5]!r}"
+
+
 def test_snapshot_creates_baselines_tab_when_missing(capsys):
     tasks = [Task(id="1", level=1, name="x", duration=1,
                   start=date(2026, 5, 11), end=date(2026, 5, 11))]

@@ -70,12 +70,19 @@ def cmd_baseline_snapshot(args: argparse.Namespace, ss) -> int:
     """
     from . import baseline_io, schema, sheets as gs_sheets
     from .baseline import BaselineRow, active_baselines
+    from .cascade import (
+        CycleError, MissingPredecessorError, UnanchoredError, cascade,
+    )
+    from .model import Program
 
     programs = resolve_target_programs(ss, args)
     all_rows = baseline_io.read_baselines(ss)
     today = _date.today()
     actor = args.actor or os.environ.get("USER", "unknown")
     label = args.label or ""
+
+    config_ws = ss.worksheet("_Config")
+    holidays = schema.read_holidays_from_config(config_ws)
 
     exit_code = 0
     for program in programs:
@@ -106,6 +113,24 @@ def cmd_baseline_snapshot(args: argparse.Namespace, ss) -> int:
             exit_code = 1
             continue
 
+        # Cascade in-memory so the baseline captures the plan-of-record dates
+        # (predecessors + durations + holidays), not whatever stale values
+        # happen to be in the sheet's Start/End columns. Without this, a sheet
+        # that hasn't been `gantt recalc`'d since the last edit produces a
+        # baseline that locks in stale dates and causes phantom slip in
+        # downstream views (decks, baseline show).
+        sheet_dates = {t.id: (t.start, t.end) for t in tasks}
+        program_obj = Program(name=program, tasks=tasks, holidays=holidays)
+        try:
+            cascade(program_obj)
+        except (CycleError, UnanchoredError, MissingPredecessorError) as e:
+            _fail(f"baseline snapshot — {program} cascade failed — {e}")
+            exit_code = 1
+            continue
+        stale_ids = [
+            t.id for t in tasks if (t.start, t.end) != sheet_dates[t.id]
+        ]
+
         new_rows = [
             BaselineRow(
                 program=program,
@@ -125,6 +150,12 @@ def cmd_baseline_snapshot(args: argparse.Namespace, ss) -> int:
         all_rows.extend(new_rows)
 
         verb = "rebaselined" if is_rebaseline else "snapshot"
+        if stale_ids:
+            print(
+                f"gantt: baseline snapshot — {program}: {len(stale_ids)} sheet "
+                f"date(s) were stale; baseline captured cascade output. "
+                f"Run `gantt recalc {program}` to sync the sheet."
+            )
         _ok(f"baseline {verb} — {program}, {len(tasks)} tasks, {today.isoformat()}")
 
     return exit_code
