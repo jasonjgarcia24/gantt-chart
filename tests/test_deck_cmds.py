@@ -40,6 +40,7 @@ def _make_workbook(programs: dict[str, list[Task]] | None = None) -> FakeSpreads
 def _make_args(**overrides) -> argparse.Namespace:
     defaults = dict(
         audience="tactical", program=None, all=False, all_programs=False,
+        no_narrative=True, model="haiku",  # default-off in tests: keep them deterministic
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -291,6 +292,113 @@ def test_warns_when_targeted_program_has_no_baseline(
     err = capsys.readouterr().err
     assert "no active baseline for TPM90" in err
     assert "gantt baseline snapshot" in err
+
+
+class _FakeNarrativeClient:
+    """Stand-in for NarrativeClient — returns a canned summary, no API calls."""
+
+    def __init__(self, model="haiku", text="canned section summary."):
+        from gantt_lib.deck.narrative import NarrativeConfig
+        self.config = NarrativeConfig(enabled=True, model=model)
+        self._text = text
+        self.call_count = 0
+
+    def summary(self, audience, scope, section_data):
+        self.call_count += 1
+        return self._text
+
+
+def test_narrative_enabled_inserts_summary_slide_after_divider(
+    tmp_config, services, small_program, monkeypatch,
+):
+    """With narrative on, summary slide sits between divider and content slides."""
+    slides, drive = services
+    ss = _make_workbook(programs={"TPM90": small_program})
+    fake = _FakeNarrativeClient(text="here is the summary.")
+    monkeypatch.setattr(
+        deck_cmds, "_build_narrative_client", lambda args: fake,
+    )
+    deck_cmds.cmd_deck(
+        _make_args(audience="tactical", program="TPM90", no_narrative=False),
+        ss, slides, drive,
+    )
+    requests = _batch_update_calls(slides)[0]["body"]["requests"]
+    create_slide_ids = [
+        r["createSlide"]["objectId"] for r in requests if "createSlide" in r
+    ]
+    # Order: divider → summary → 5 content slides
+    assert create_slide_ids[0].startswith("div-T-TPM90-")
+    assert "-0-summary" in create_slide_ids[1]
+    assert fake.call_count == 1
+
+
+def test_no_narrative_flag_skips_llm_call(
+    tmp_config, services, small_program, monkeypatch,
+):
+    """--no-narrative path: orchestrator gets no summary slide, no LLM call."""
+    slides, drive = services
+    ss = _make_workbook(programs={"TPM90": small_program})
+    fake = _FakeNarrativeClient()
+    monkeypatch.setattr(
+        deck_cmds, "_build_narrative_client", lambda args: None,
+    )
+    deck_cmds.cmd_deck(
+        _make_args(audience="tactical", program="TPM90", no_narrative=True),
+        ss, slides, drive,
+    )
+    requests = _batch_update_calls(slides)[0]["body"]["requests"]
+    summary_slides = [
+        r for r in requests
+        if "createSlide" in r and "-0-summary" in r["createSlide"]["objectId"]
+    ]
+    assert summary_slides == []
+    assert fake.call_count == 0
+
+
+def test_narrative_failure_skips_summary_slide(
+    tmp_config, services, small_program, monkeypatch, capsys,
+):
+    """When the LLM client returns None (failure), no summary slide is added."""
+    slides, drive = services
+    ss = _make_workbook(programs={"TPM90": small_program})
+
+    class _FailingClient(_FakeNarrativeClient):
+        def summary(self, *a, **kw):
+            self.call_count += 1
+            return None
+
+    fake = _FailingClient()
+    monkeypatch.setattr(
+        deck_cmds, "_build_narrative_client", lambda args: fake,
+    )
+    deck_cmds.cmd_deck(
+        _make_args(audience="tactical", program="TPM90", no_narrative=False),
+        ss, slides, drive,
+    )
+    requests = _batch_update_calls(slides)[0]["body"]["requests"]
+    summary_slides = [
+        r for r in requests
+        if "createSlide" in r and "-0-summary" in r["createSlide"]["objectId"]
+    ]
+    assert summary_slides == []  # graceful degrade
+
+
+def test_result_line_annotates_narrative_call_count(
+    tmp_config, services, small_program, monkeypatch, capsys,
+):
+    """When narrative ran, the result line includes the call count and model."""
+    slides, drive = services
+    ss = _make_workbook(programs={"TPM90": small_program})
+    fake = _FakeNarrativeClient(model="haiku")
+    monkeypatch.setattr(
+        deck_cmds, "_build_narrative_client", lambda args: fake,
+    )
+    deck_cmds.cmd_deck(
+        _make_args(audience="tactical", program="TPM90", no_narrative=False),
+        ss, slides, drive,
+    )
+    out = capsys.readouterr().out
+    assert "narrative: 1 call(s), haiku" in out
 
 
 def test_no_warning_when_baseline_exists(

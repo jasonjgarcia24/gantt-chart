@@ -280,6 +280,40 @@ def _build_one_table_slide(
     return requests
 
 
+def _create_summary_slide(
+    slide_id: str, title: str, summary_text: str,
+) -> list[dict]:
+    """Title at top, narrative paragraph below — used for LLM-generated
+    section summaries that sit between the divider and the content slides.
+
+    Font is 12pt (vs the 8pt table cell font) since this is prose, not data,
+    and there's no row-count pressure. Box fills most of the slide.
+    """
+    body_id = f"{slide_id}-body"
+    requests: list[dict] = [
+        {"createSlide": {
+            "objectId": slide_id,
+            "slideLayoutReference": {"predefinedLayout": "BLANK"},
+        }},
+    ]
+    requests.extend(_title_textbox(slide_id, title))
+    requests.extend([
+        {"createShape": {
+            "objectId": body_id,
+            "shapeType": "TEXT_BOX",
+            "elementProperties": _shape_props(slide_id, 0.5, 1.0, 9, 4.5),
+        }},
+        {"insertText": {"objectId": body_id, "text": summary_text}},
+        {"updateTextStyle": {
+            "objectId": body_id,
+            "style": {"fontSize": {"magnitude": 12, "unit": "PT"}},
+            "textRange": {"type": "ALL"},
+            "fields": "fontSize",
+        }},
+    ])
+    return requests
+
+
 def _create_image_slide(
     slide_id: str, title: str, image_url: str,
 ) -> list[dict]:
@@ -344,6 +378,7 @@ def tactical_section_requests(
     cp_due_tasks: list[Task],
     recent_tasks: list[Task],
     gantt_image_url: str,
+    summary_text: Optional[str] = None,
 ) -> tuple[list[dict], str]:
     """Compose the full tactical section: divider + 5 content slides.
 
@@ -363,6 +398,11 @@ def tactical_section_requests(
     requests.extend(_create_divider_slide(
         divider_id, "Tactical", program_name, today, actor,
     ))
+
+    if summary_text:
+        requests.extend(_create_summary_slide(
+            f"{prefix}-0-summary", "Section Summary", summary_text,
+        ))
 
     requests.extend(_create_table_slide(
         f"{prefix}-1-week",
@@ -427,6 +467,7 @@ def strategic_section_requests(
     cp_rows: list[CPRow],
     risk_rows: list[RiskRow],
     forward_rows: list[ForwardMilestone],
+    summary_text: Optional[str] = None,
 ) -> tuple[list[dict], str]:
     """Compose the full strategic section: divider + 5 content slides.
 
@@ -443,6 +484,11 @@ def strategic_section_requests(
     requests.extend(_create_divider_slide(
         divider_id, "Strategic", scope, today, actor,
     ))
+
+    if summary_text:
+        requests.extend(_create_summary_slide(
+            f"{prefix}-0-summary", "Section Summary", summary_text,
+        ))
 
     # S1: Portfolio Status
     requests.extend(_create_table_slide(

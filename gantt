@@ -1250,6 +1250,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-programs", action="store_true",
         help="strategic: portfolio rollup (default if no flag)",
     )
+    p_deck.add_argument(
+        "--no-narrative", action="store_true",
+        help="skip the LLM-generated section summary slide (saves the Anthropic API call)",
+    )
+    p_deck.add_argument(
+        "--model", choices=["haiku", "sonnet", "opus"], default="haiku",
+        help="model for narrative generation when enabled (default: haiku)",
+    )
     p_deck.set_defaults(func=cmd_deck)
 
     return parser
