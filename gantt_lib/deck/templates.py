@@ -458,8 +458,8 @@ def strategic_section_requests(
     ))
 
     # S2: Milestone Slip Summary — one slide per program (no Program column).
-    # Drops a column → Milestone column gets ~2.25" instead of 1.8" → ~28 chars
-    # fit on one line at 8pt before wrapping, so truncation can relax to 28.
+    # Milestone names render in full; long names wrap inside the cell. The
+    # MAX_TABLE_ROWS_PER_SLIDE pagination cap still bounds vertical growth.
     program_names = [r.program for r in portfolio_rows] or [scope]
     by_program: dict[str, list[MilestoneSlipRow]] = {p: [] for p in program_names}
     for r in milestone_rows:
@@ -471,7 +471,7 @@ def strategic_section_requests(
             f"Milestone Slip Summary — {p}",
             ["Milestone", "Baseline Date", "Current Date", "Slip"],
             [
-                [_truncate(r.name, n=28),
+                [r.name,
                  _date_str(r.baseline_end), _date_str(r.current_end),
                  _slip_str(r.slip)]
                 for r in p_rows

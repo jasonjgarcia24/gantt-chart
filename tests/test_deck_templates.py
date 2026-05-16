@@ -164,8 +164,8 @@ def test_create_table_slide_uses_small_cell_font():
         assert s["style"]["fontSize"]["magnitude"] == TABLE_CELL_PT
 
 
-def test_strategic_milestone_names_truncated_to_fit_wider_column():
-    """S2 milestone names cap at ~28 chars (one line in 2.25" col at 8pt)."""
+def test_strategic_milestone_names_render_in_full():
+    """S2 milestone names render full text — no truncation, wrap in cell."""
     long_name = "A" * 50
     reqs, _ = strategic_section_requests(
         "Portfolio", TODAY, "alice",
@@ -180,8 +180,7 @@ def test_strategic_milestone_names_truncated_to_fit_wider_column():
         and r["insertText"]["text"].startswith("A")
     ]
     assert milestone_cell_inserts
-    # 28 chars + ellipsis = 29 max
-    assert all(len(t) <= 30 for t in milestone_cell_inserts), milestone_cell_inserts
+    assert long_name in milestone_cell_inserts
 
 
 def test_strategic_milestone_summary_one_slide_per_program():
