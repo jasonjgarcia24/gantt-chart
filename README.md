@@ -273,6 +273,33 @@ A typical deck has 4-6 sections, so one `gantt deck` call on Haiku is fractions 
 
 </details>
 
+<details>
+<summary><b>State files in <code>~/.config/gantt/</code></b></summary>
+
+The skill stores all per-user state under `~/.config/gantt/`. Four files,
+none of them in git (your sheet data lives in Google Drive, not on disk):
+
+| File | Sensitivity | What it holds | Created by | Safe to delete? |
+|---|---|---|---|---|
+| `credentials.json` | 🔒 Sensitive | OAuth Desktop client JSON from Google Cloud Console (Sheets + Drive + Slides scopes). Identifies your *app* to Google. | You — manual drop (or `/gantt:init` Gate 5 walkthrough) | No — deleting forces a re-do of Cloud Console setup. Override path with `GANTT_CREDS=/path/to/credentials.json`. |
+| `token.json` | 🔒 Sensitive | OAuth refresh + access tokens after first browser consent. Identifies *you* to Google. Auto-refreshed on expiry. | First `gantt bootstrap` (browser consent) | Yes — deleting forces a fresh OAuth consent next run. Useful fix for `invalid_grant` errors. |
+| `config.json` | Low | Workbook pointer (`sheet_id`, `sheet_url`, `title`) plus a `decks` block — one entry per audience-year holding the Slides file id + URL. See [`docs/specs/deck-generation.md`](docs/specs/deck-generation.md) for the deck-record schema. | `gantt bootstrap` writes the workbook block; first `gantt deck` per audience-year writes a `decks.<audience>_<year>` entry. | Caution — deleting `sheet_id` forces a re-bootstrap (creates a NEW workbook; the old one stays in your Drive). Deleting a `decks.<audience>_<year>` key forces a new yearly deck file on the next `gantt deck` call. |
+| `.env` | 🔒 Sensitive | Plain `KEY=value` lines loaded into `os.environ` at every CLI start. Currently used for `ANTHROPIC_API_KEY` (see Anthropic key setup above). Lines starting with `#` are comments; `export KEY=...` is also accepted. Shell-set vars take precedence over file values. | You — manual | Yes — only affects optional features (e.g., narrative summaries silently skip without `ANTHROPIC_API_KEY`). |
+
+**Permissions:** all four files should be `0600` (owner-read/write only). The
+CLI writes `credentials.json`, `token.json`, and `config.json` at `0600`
+already; tighten `.env` manually if you created it by hand:
+
+```bash
+chmod 600 ~/.config/gantt/.env
+```
+
+**Quick inspect:** `/gantt info` prints all four paths with an exists flag,
+plus the bound workbook URL and per-program baseline coverage. Safe
+read-only — no network calls beyond the existing OAuth token.
+
+</details>
+
 ---
 
 ## Usage (commands shipped so far)
