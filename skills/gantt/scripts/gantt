@@ -3,14 +3,17 @@
 
 Tabs (per workbook): _Config, _People, _Portfolio, P_<name> (one per program).
 
-Self-contained:
-  Venv:          tools/gantt/.venv/                (created by `gantt setup`)
-  OAuth client:  ~/.config/gantt/credentials.json  (override: $GANTT_CREDS)
-  User token:    ~/.config/gantt/token.json        (refresh token after consent)
-  Sheet config:  ~/.config/gantt/config.json       (sheet_id + url after bootstrap)
+Self-contained inside the `gantt` skill bundle:
+  Script:        skills/gantt/scripts/gantt          (this file)
+  Lib:           skills/gantt/scripts/gantt_lib/     (Python package, sibling)
+  Requirements:  skills/gantt/scripts/requirements.txt
+  Venv:          skills/gantt/.venv/                 (created by `gantt setup`)
+  OAuth client:  ~/.config/gantt/credentials.json    (override: $GANTT_CREDS)
+  User token:    ~/.config/gantt/token.json          (refresh token after consent)
+  Sheet config:  ~/.config/gantt/config.json         (sheet_id + url after bootstrap)
 
 First-run workflow:
-  1. gantt setup       # create bundle-local venv + install deps
+  1. gantt setup       # create skill-local venv + install deps
   2. gantt bootstrap   # OAuth browser consent + create Google Sheet
   3. gantt program new <name> ; gantt task add ...
 
@@ -29,7 +32,10 @@ import sys
 from pathlib import Path
 
 BUNDLE_DIR = Path(os.path.realpath(__file__)).parent
-VENV_DIR = BUNDLE_DIR / ".venv"
+# Venv lives at the skill root (one level up from scripts/) so the skill
+# folder is fully self-contained — `skills/gantt/` is the portable unit.
+SKILL_DIR = BUNDLE_DIR.parent
+VENV_DIR = SKILL_DIR / ".venv"
 VENV_PY = VENV_DIR / "bin/python3"
 VENV_PIP = VENV_DIR / "bin/pip"
 REQ_FILE = BUNDLE_DIR / "requirements.txt"
