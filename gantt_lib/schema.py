@@ -352,6 +352,30 @@ def boundary_border_request(sheet_id: int, start_col_idx: int,
     }
 
 
+def wbs_column_text_format_request(sheet_id: int) -> dict:
+    """Force col A (WBS ids) to TEXT format so values like '4.10' / '6.10' aren't
+    silently coerced to numbers and truncated to '4.1' / '6.1' (issue #1).
+
+    Repro: write '4.10' with USER_ENTERED to a DEFAULT-formatted col A → Sheets
+    parses as float 4.1 → stored as 4.1 → collides with the existing 4.1 row.
+    TEXT format on col A keeps the string verbatim.
+    """
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startColumnIndex": 0, "endColumnIndex": 1,
+            },
+            "cell": {
+                "userEnteredFormat": {
+                    "numberFormat": {"type": "TEXT"},
+                }
+            },
+            "fields": "userEnteredFormat.numberFormat",
+        }
+    }
+
+
 def freeze_layout_request(sheet_id: int, frozen_cols: int = 3) -> dict:
     return {
         "updateSheetProperties": {

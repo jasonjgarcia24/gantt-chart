@@ -416,6 +416,7 @@ def cmd_program_new(args: argparse.Namespace) -> int:
         schema.freeze_layout_request(ws.id),
         schema.status_validation_request(ws.id),
         schema.milestone_checkbox_request(ws.id),
+        schema.wbs_column_text_format_request(ws.id),
     ]
 
     # Merge each grouping run on its respective header row.

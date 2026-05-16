@@ -171,6 +171,18 @@ def test_timeline_arrayformula_uses_column_and_row_ranges_for_broadcast():
     assert '""' in f  # empty-string fallback for non-matching cells
 
 
+def test_wbs_column_text_format_request_targets_col_a_only():
+    """Issue #1: col A (wbs) must be TEXT-formatted so '4.10' isn't truncated."""
+    from gantt_lib.schema import wbs_column_text_format_request
+    req = wbs_column_text_format_request(sheet_id=42)
+    rc = req["repeatCell"]
+    assert rc["range"]["sheetId"] == 42
+    assert rc["range"]["startColumnIndex"] == 0
+    assert rc["range"]["endColumnIndex"] == 1
+    assert rc["cell"]["userEnteredFormat"]["numberFormat"]["type"] == "TEXT"
+    assert rc["fields"] == "userEnteredFormat.numberFormat"
+
+
 def test_wrap_strategy_request_sets_overflow_cell_on_timeline():
     req = wrap_strategy_request(sheet_id=42, timeline_cols=5)
     rc = req["repeatCell"]
