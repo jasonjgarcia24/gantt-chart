@@ -50,7 +50,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/presentations",
 ]
-SHEET_TITLE = "Jason — Program Portfolio"
+SHEET_TITLE = "Program Portfolio"
 
 # --- venv self-exec trampoline ------------------------------------------------
 # If a bundle-local venv exists and we're not already running under it, re-exec
@@ -310,9 +310,13 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
             "  use --force to recreate (old sheet is NOT deleted)"
         )
 
+    title = args.title.strip() if args.title else SHEET_TITLE
+    if not title:
+        title = SHEET_TITLE
+
     client = get_client()
-    print("gantt: creating new Google Sheet...", file=sys.stderr)
-    ss = client.create(SHEET_TITLE)
+    print(f"gantt: creating new Google Sheet '{title}'...", file=sys.stderr)
+    ss = client.create(title)
 
     # Rename the default Sheet1 → _Config, resize, write the seed grid.
     ws = ss.sheet1
@@ -324,7 +328,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     ws.format("A1:J1", {"textFormat": {"bold": True}})
 
     sheet_url = f"https://docs.google.com/spreadsheets/d/{ss.id}"
-    write_config({"sheet_id": ss.id, "sheet_url": sheet_url, "title": SHEET_TITLE})
+    write_config({"sheet_id": ss.id, "sheet_url": sheet_url, "title": title})
     ok(f"bootstrapped -> {sheet_url}")
     return 0
 
@@ -1053,6 +1057,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="create a new sheet (does not delete the old one)",
+    )
+    p_bootstrap.add_argument(
+        "--title",
+        default=None,
+        help=f"name for the new Google Sheet (default: \"{SHEET_TITLE}\")",
     )
     p_bootstrap.set_defaults(func=cmd_bootstrap)
 

@@ -100,7 +100,7 @@ def find_or_bootstrap_yearly_file(
                 f"decks.{audience}_{year} key, then re-run to create a new file."
             )
 
-    title = f"Jason — {audience.capitalize()} Decks — {year}"
+    title = f"{audience.capitalize()} Decks — {year}"
     pres = slides_svc.presentations().create(body={"title": title}).execute()
     file_id = pres["presentationId"]
     url = f"https://docs.google.com/presentation/d/{file_id}"

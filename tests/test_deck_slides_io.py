@@ -34,7 +34,7 @@ def test_set_deck_record_creates_decks_block(tmp_config):
     rec = {
         "file_id": "abc", "url": "https://docs.google.com/presentation/d/abc",
         "created_at": "2026-05-14",
-        "title": "Jason — Tactical Decks — 2026",
+        "title": "Tactical Decks — 2026",
     }
     slides_io.set_deck_record("tactical", 2026, rec)
     cfg = json.loads(tmp_config.read_text())
@@ -45,7 +45,7 @@ def test_set_then_get_round_trips(tmp_config):
     rec = {
         "file_id": "xyz", "url": "https://docs.google.com/presentation/d/xyz",
         "created_at": "2026-05-14",
-        "title": "Jason — Strategic Decks — 2026",
+        "title": "Strategic Decks — 2026",
     }
     slides_io.set_deck_record("strategic", 2026, rec)
     assert slides_io.get_deck_record("strategic", 2026) == rec
@@ -56,7 +56,7 @@ def test_set_deck_record_preserves_unrelated_config_keys(tmp_config):
     tmp_config.write_text(json.dumps({
         "sheet_id": "S1",
         "sheet_url": "https://docs.google.com/spreadsheets/d/S1",
-        "title": "Jason — Program Portfolio",
+        "title": "Program Portfolio",
     }))
     slides_io.set_deck_record("tactical", 2026, {
         "file_id": "abc", "url": "u", "created_at": "d", "title": "t",
@@ -64,7 +64,7 @@ def test_set_deck_record_preserves_unrelated_config_keys(tmp_config):
     cfg = json.loads(tmp_config.read_text())
     assert cfg["sheet_id"] == "S1"
     assert cfg["sheet_url"] == "https://docs.google.com/spreadsheets/d/S1"
-    assert cfg["title"] == "Jason — Program Portfolio"
+    assert cfg["title"] == "Program Portfolio"
     assert "tactical_2026" in cfg["decks"]
 
 

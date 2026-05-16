@@ -102,7 +102,7 @@ def test_second_run_reuses_existing_file_id(tmp_config, services, small_program)
     slides_io.set_deck_record("tactical", date.today().year, {
         "file_id": "existing-pres", "url": "https://docs.google.com/presentation/d/existing-pres",
         "created_at": "2026-04-01",
-        "title": f"Jason — Tactical Decks — {date.today().year}",
+        "title": f"Tactical Decks — {date.today().year}",
     })
     slides, drive = services
     ss = _make_workbook(programs={"TPM90": small_program})
@@ -119,7 +119,7 @@ def test_stale_config_file_id_raises_with_cleanup_hint(tmp_config, services, sma
     slides_io.set_deck_record("tactical", date.today().year, {
         "file_id": "deleted-pres", "url": "https://docs.google.com/presentation/d/deleted-pres",
         "created_at": "2026-04-01",
-        "title": f"Jason — Tactical Decks — {date.today().year}",
+        "title": f"Tactical Decks — {date.today().year}",
     })
     slides, drive = services
     slides.fail_get_with(Exception("404 Not Found"))
