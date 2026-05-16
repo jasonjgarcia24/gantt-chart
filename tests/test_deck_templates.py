@@ -18,6 +18,7 @@ from gantt_lib.deck.data import (
     RiskRow,
 )
 from gantt_lib.deck.templates import (
+    MAX_TABLE_ROWS_PER_SLIDE,
     _create_bullets_slide,
     _create_divider_slide,
     _create_image_slide,
@@ -90,6 +91,58 @@ def test_create_table_slide_empty_rows_renders_no_items_placeholder():
     # Should still render a table with 1 header + 1 data row
     create_table_req = next(r["createTable"] for r in reqs if "createTable" in r)
     assert create_table_req["rows"] == 2  # 1 header + 1 placeholder
+
+
+def test_create_table_slide_at_threshold_stays_single_slide():
+    """Exactly MAX rows → still one slide, no title suffix, no slide-id suffix."""
+    rows = [[str(i), "x", "y"] for i in range(MAX_TABLE_ROWS_PER_SLIDE)]
+    reqs = _create_table_slide("tab-1", "Big Table", ["A", "B", "C"], rows)
+    create_slides = [r for r in reqs if "createSlide" in r]
+    assert len(create_slides) == 1
+    assert create_slides[0]["createSlide"]["objectId"] == "tab-1"
+    title_text = next(
+        r["insertText"]["text"] for r in reqs
+        if "insertText" in r and r["insertText"].get("objectId") == "tab-1-title"
+    )
+    assert "(" not in title_text  # no pagination suffix
+
+
+def test_create_table_slide_overflow_paginates_with_suffix():
+    """MAX+1 rows → 2 slides; title gets '(1/2)' / '(2/2)'; ids get '-1' / '-2'."""
+    rows = [[str(i), "x", "y"] for i in range(MAX_TABLE_ROWS_PER_SLIDE + 1)]
+    reqs = _create_table_slide("tab-1", "Overflowing", ["A", "B", "C"], rows)
+    create_slides = [r["createSlide"] for r in reqs if "createSlide" in r]
+    assert len(create_slides) == 2
+    assert [s["objectId"] for s in create_slides] == ["tab-1-1", "tab-1-2"]
+    titles = [
+        r["insertText"]["text"] for r in reqs
+        if "insertText" in r and r["insertText"].get("objectId", "").endswith("-title")
+    ]
+    assert titles == ["Overflowing (1/2)", "Overflowing (2/2)"]
+
+
+def test_create_table_slide_paginated_distributes_data_rows_correctly():
+    """Last page gets the remainder; first page gets exactly MAX."""
+    n = MAX_TABLE_ROWS_PER_SLIDE + 3
+    rows = [[str(i), "x", "y"] for i in range(n)]
+    reqs = _create_table_slide("tab-1", "Distributed", ["A", "B", "C"], rows)
+    create_tables = [r["createTable"] for r in reqs if "createTable" in r]
+    # rows count includes the header (+1)
+    assert create_tables[0]["rows"] == MAX_TABLE_ROWS_PER_SLIDE + 1
+    assert create_tables[1]["rows"] == 3 + 1  # remainder + header
+
+
+def test_create_table_slide_paginated_object_ids_unique():
+    """Across all paginated slides, every objectId stays unique."""
+    rows = [[str(i), "x", "y"] for i in range(MAX_TABLE_ROWS_PER_SLIDE * 3)]
+    reqs = _create_table_slide("tab-1", "Big", ["A", "B", "C"], rows)
+    ids = _all_object_ids(reqs)
+    create_kinds = ("createSlide", "createShape", "createTable")
+    created = [
+        r[k]["objectId"] for r in reqs for k in create_kinds if k in r
+    ]
+    assert len(created) == len(set(created))
+    assert all(i.startswith("tab-1") for i in ids)
 
 
 def test_create_image_slide_has_create_image_request():

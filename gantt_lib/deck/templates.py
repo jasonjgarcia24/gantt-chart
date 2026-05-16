@@ -152,18 +152,47 @@ def _create_divider_slide(
     ]
 
 
+# Max data rows per table slide before pagination kicks in. With a 4" table
+# height and 9pt cell font, ~18 data rows + 1 header keeps each row at ~0.21"
+# (readable). Beyond that, the proportional row-sizing in the Slides API
+# clips text, and the table can extend past the 5.625" slide bottom edge.
+MAX_TABLE_ROWS_PER_SLIDE = 18
+
+
 def _create_table_slide(
     slide_id: str, title: str, headers: list[str], rows: list[list[str]],
 ) -> list[dict]:
-    """Title at top, table below. Empty `rows` → single 'No items' row.
+    """Title at top, table below. Paginates across slides when rows overflow.
 
-    Empty-state UX (per spec Open Question 2): always render the table even
-    when selection is empty, so each section is a predictable count of slides
-    for navigation.
+    - Empty `rows`: renders one slide with a single "No items" placeholder row.
+    - `len(rows) <= MAX_TABLE_ROWS_PER_SLIDE`: one slide, original `slide_id`
+      and `title` preserved (singletons retain their deep-link contract).
+    - Larger: splits into N slides. Title becomes `"<title> (page/total)"`;
+      slide IDs become `"{slide_id}-1"`, `"{slide_id}-2"`, etc.
     """
     if not rows:
         rows = [["No items"] + [""] * (len(headers) - 1)]
 
+    if len(rows) <= MAX_TABLE_ROWS_PER_SLIDE:
+        return _build_one_table_slide(slide_id, title, headers, rows)
+
+    chunks = [
+        rows[i:i + MAX_TABLE_ROWS_PER_SLIDE]
+        for i in range(0, len(rows), MAX_TABLE_ROWS_PER_SLIDE)
+    ]
+    total = len(chunks)
+    requests: list[dict] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        page_id = f"{slide_id}-{idx}"
+        page_title = f"{title} ({idx}/{total})"
+        requests.extend(_build_one_table_slide(page_id, page_title, headers, chunk))
+    return requests
+
+
+def _build_one_table_slide(
+    slide_id: str, title: str, headers: list[str], rows: list[list[str]],
+) -> list[dict]:
+    """Build a single table slide; assumes rows already capped/chunked by caller."""
     n_rows = len(rows) + 1  # +1 for header
     n_cols = len(headers)
     table_id = f"{slide_id}-table"
