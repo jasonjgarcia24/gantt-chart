@@ -169,6 +169,23 @@ def ensure_baselines_tab(ss):
                 "fields": "userEnteredFormat.numberFormat",
             }
         },
+        # Force col B (wbs) to TEXT so WBS ids like '4.10' / '6.10' aren't
+        # silently truncated to '4.1' / '6.1' by Sheets numeric coercion —
+        # same root cause as issue #1, applied here to the _Baselines tab.
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": ws.id,
+                    "startColumnIndex": 1, "endColumnIndex": 2,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "numberFormat": {"type": "TEXT"},
+                    }
+                },
+                "fields": "userEnteredFormat.numberFormat",
+            }
+        },
     ]
     ss.batch_update({"requests": requests})
     return ws
@@ -184,9 +201,12 @@ def append_baselines(ss, rows: list[BaselineRow]) -> None:
     if not rows:
         return
     ws = ensure_baselines_tab(ss)
+    # RAW (not USER_ENTERED) so WBS strings like '4.10' aren't parsed as
+    # numbers and truncated to '4.1' — same root cause as issue #1. Dates
+    # are still readable as 'yyyy-mm-dd' strings under DATE-formatted cols.
     ws.append_rows(
         [baseline_row_to_cells(r) for r in rows],
-        value_input_option="USER_ENTERED",
+        value_input_option="RAW",
     )
 
 
