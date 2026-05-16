@@ -5,11 +5,17 @@ Each helper returns the request list to create one slide of a specific shape
 `tactical_section_requests` and `strategic_section_requests` — compose them
 into a full appendable section: 1 divider + 5 content slides per audience.
 
-Object IDs combine a human-readable prefix (audience + scope + date) with a
+Object IDs combine a compact prefix (audience tag + scope + date) with a
 per-call hex nonce. The prefix keeps the result-line URL anchor
-(`#slide=id.divider-<audience>-<scope>-<YYYYMMDD>-<nonce>`) recognizable,
-and the nonce guarantees uniqueness across same-day re-runs (the Slides
+(`#slide=id.div-<T|S>-<scope>-<YYYYMMDD>-<nonce>`) recognizable, and the
+nonce guarantees uniqueness across same-day re-runs (the Slides
 `batchUpdate` API rejects any objectId that already exists in the file).
+
+Length budget: Slides API caps objectIds at 50 chars. The longest derived
+suffix (e.g. `-2-milestones-2-table` on a paginated content slide, or
+`-subtitle` on the divider) leaves ~28 chars for the prefix. The chosen
+format with a 14-char scope cap and 4-char nonce keeps every derived id
+inside that budget — see _id_safe_name.
 """
 from __future__ import annotations
 
@@ -34,6 +40,25 @@ SLIDE_HEIGHT = 5.625 * EMU_PER_INCH
 # Audience accent colors for the divider slide (RGB 0-1 floats).
 TACTICAL_BG = {"red": 0.95, "green": 0.95, "blue": 0.95}   # neutral grey
 STRATEGIC_BG = {"red": 0.92, "green": 0.95, "blue": 1.0}    # light blue
+
+
+# Max scope (program name) length when used inside a Slides objectId.
+# Worst-case derived id today is `{audience}-{scope}-{ts}-{nonce}-2-milestones-N-table`
+# = 1+1+scope+1+8+1+4+1+1+1+10+1+1+1+5 = 37 + scope. With scope ≤ 12 → ≤ 49 chars,
+# leaving 1 char of margin under the Slides API 50-char objectId cap.
+# Keep at 12: most program names are 5-8 chars; longer names get truncated
+# in objectIds only — full name still appears in slide titles.
+MAX_SCOPE_IN_ID = 12
+
+
+def _id_safe_name(name: str) -> str:
+    """Truncate a program/scope name for use in Slides objectIds.
+
+    Truncation is cosmetic — the full name still appears in slide titles
+    and table cells. Slides API caps objectIds at 50 chars; long scope
+    names blow that budget once nested suffixes are appended.
+    """
+    return name[:MAX_SCOPE_IN_ID]
 
 
 # ---------- atomic helpers ----------
@@ -322,9 +347,10 @@ def tactical_section_requests(
     in slides_io.upload_image_to_drive).
     """
     ts = today.strftime("%Y%m%d")
-    nonce = uuid.uuid4().hex[:8]
-    divider_id = f"divider-tactical-{program_name}-{ts}-{nonce}"
-    prefix = f"t-{program_name}-{ts}-{nonce}"
+    nonce = uuid.uuid4().hex[:4]
+    scope_id = _id_safe_name(program_name)
+    divider_id = f"div-T-{scope_id}-{ts}-{nonce}"
+    prefix = f"T-{scope_id}-{ts}-{nonce}"
 
     requests: list[dict] = []
     requests.extend(_create_divider_slide(
@@ -401,9 +427,10 @@ def strategic_section_requests(
     "Portfolio" for the all-programs default.
     """
     ts = today.strftime("%Y%m%d")
-    nonce = uuid.uuid4().hex[:8]
-    divider_id = f"divider-strategic-{scope}-{ts}-{nonce}"
-    prefix = f"s-{scope}-{ts}-{nonce}"
+    nonce = uuid.uuid4().hex[:4]
+    scope_id = _id_safe_name(scope)
+    divider_id = f"div-S-{scope_id}-{ts}-{nonce}"
+    prefix = f"S-{scope_id}-{ts}-{nonce}"
 
     requests: list[dict] = []
     requests.extend(_create_divider_slide(

@@ -18,6 +18,7 @@ from gantt_lib.deck.data import (
     RiskRow,
 )
 from gantt_lib.deck.templates import (
+    MAX_SCOPE_IN_ID,
     MAX_TABLE_ROWS_PER_SLIDE,
     _create_bullets_slide,
     _create_divider_slide,
@@ -185,7 +186,7 @@ def test_tactical_section_starts_with_divider():
         r["createSlide"] for r in reqs if "createSlide" in r
     )
     assert first_create["objectId"] == divider_id
-    assert "divider-tactical-TPM90" in divider_id
+    assert divider_id.startswith("div-T-TPM90-")
 
 
 def test_tactical_section_has_six_create_slide_requests():
@@ -224,6 +225,31 @@ def test_tactical_back_to_back_calls_get_distinct_divider_ids():
     a_ids = _all_object_ids(a)
     b_ids = _all_object_ids(b)
     assert a_ids.isdisjoint(b_ids)
+
+
+def test_all_section_object_ids_fit_slides_50_char_cap():
+    """Slides API rejects objectIds > 50 chars (issue #5).
+
+    Worst case is the longest derived suffix on the longest scope name,
+    paginated. Force pagination + a 14-char scope and check every id.
+    """
+    long_scope = "X" * MAX_SCOPE_IN_ID  # at the cap
+    big_milestones = [
+        MilestoneSlipRow(program=long_scope, wbs=str(i), name="M",
+                         baseline_end=date(2026, 6, 1),
+                         current_end=date(2026, 6, 5), slip=4)
+        for i in range(40)  # forces 3 paginated milestone slides
+    ]
+    reqs, _ = strategic_section_requests(
+        long_scope, TODAY, "alice",
+        portfolio_rows=[_portfolio_row(program=long_scope)],
+        milestone_rows=big_milestones,
+        cp_rows=[_cp_row(program=long_scope)],
+        risk_rows=[_risk_row(program=long_scope)],
+        forward_rows=[_forward_row(program=long_scope)],
+    )
+    over = [oid for oid in _all_object_ids(reqs) if len(oid) > 50]
+    assert not over, f"objectIds over 50 chars: {[(o, len(o)) for o in over]}"
 
 
 def test_strategic_back_to_back_calls_get_distinct_divider_ids():

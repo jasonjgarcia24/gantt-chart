@@ -275,5 +275,5 @@ def test_result_line_url_includes_divider_anchor(
     )
     out = capsys.readouterr().out
     assert "deck appended" in out
-    assert "#slide=id.divider-tactical-TPM90" in out
+    assert "#slide=id.div-T-TPM90-" in out
     assert "✓" in out
