@@ -369,7 +369,7 @@ def tactical_section_requests(
         "This Week + Next Week",
         ["WBS", "Name", "Owner", "Start", "End", "Status"],
         [
-            [t.id, _truncate(t.name), t.owner,
+            [t.id, t.name, t.owner,
              _date_str(t.start), _date_str(t.end), t.status]
             for t in this_week_tasks
         ],
@@ -380,7 +380,7 @@ def tactical_section_requests(
         "Blockers",
         ["WBS", "Name", "Owner", "Blocked By", "Status"],
         [
-            [t.id, _truncate(t.name), t.owner,
+            [t.id, t.name, t.owner,
              ", ".join(open_preds), t.status]
             for t, open_preds in blockers_data
         ],
@@ -391,7 +391,7 @@ def tactical_section_requests(
         "Critical Path — Due Soon",
         ["WBS", "Name", "Owner", "End", "Days Until"],
         [
-            [t.id, _truncate(t.name), t.owner, _date_str(t.end),
+            [t.id, t.name, t.owner, _date_str(t.end),
              str((t.end - today).days) if t.end else "—"]
             for t in cp_due_tasks
         ],
@@ -402,7 +402,7 @@ def tactical_section_requests(
         "Recently Completed",
         ["WBS", "Name", "Owner", "Completed", "Duration"],
         [
-            [t.id, _truncate(t.name), t.owner,
+            [t.id, t.name, t.owner,
              _date_str(t.end), str(t.duration)]
             for t in recent_tasks
         ],
