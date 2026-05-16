@@ -164,16 +164,14 @@ def test_create_table_slide_uses_small_cell_font():
         assert s["style"]["fontSize"]["magnitude"] == TABLE_CELL_PT
 
 
-def test_strategic_milestone_names_get_tighter_truncation():
-    """S2 milestone names cap at ~20 chars, not the global 30 (issue #6)."""
+def test_strategic_milestone_names_truncated_to_fit_wider_column():
+    """S2 milestone names cap at ~28 chars (one line in 2.25" col at 8pt)."""
     long_name = "A" * 50
     reqs, _ = strategic_section_requests(
         "Portfolio", TODAY, "alice",
-        portfolio_rows=[],
+        portfolio_rows=[_portfolio_row(program="A")],
         milestone_rows=[_milestone_row(name=long_name)],
-        cp_rows=[],
-        risk_rows=[],
-        forward_rows=[],
+        cp_rows=[], risk_rows=[], forward_rows=[],
     )
     milestone_cell_inserts = [
         r["insertText"]["text"] for r in reqs
@@ -182,7 +180,52 @@ def test_strategic_milestone_names_get_tighter_truncation():
         and r["insertText"]["text"].startswith("A")
     ]
     assert milestone_cell_inserts
-    assert all(len(t) <= 22 for t in milestone_cell_inserts), milestone_cell_inserts
+    # 28 chars + ellipsis = 29 max
+    assert all(len(t) <= 30 for t in milestone_cell_inserts), milestone_cell_inserts
+
+
+def test_strategic_milestone_summary_one_slide_per_program():
+    """S2 fans out: one milestone-slip slide per program in scope."""
+    reqs, _ = strategic_section_requests(
+        "Portfolio", TODAY, "alice",
+        portfolio_rows=[_portfolio_row(program="A"), _portfolio_row(program="B")],
+        milestone_rows=[
+            _milestone_row(program="A", wbs="1"),
+            _milestone_row(program="B", wbs="2"),
+        ],
+        cp_rows=[], risk_rows=[], forward_rows=[],
+    )
+    ms_slide_ids = [
+        r["createSlide"]["objectId"] for r in reqs
+        if "createSlide" in r and "-2-ms-" in r["createSlide"]["objectId"]
+    ]
+    assert len(ms_slide_ids) == 2
+    assert any("-2-ms-A" in i for i in ms_slide_ids)
+    assert any("-2-ms-B" in i for i in ms_slide_ids)
+
+
+def test_strategic_milestone_summary_drops_program_column():
+    """S2 headers no longer include 'Program' (one slide per program now)."""
+    reqs, _ = strategic_section_requests(
+        "Portfolio", TODAY, "alice",
+        portfolio_rows=[_portfolio_row(program="A")],
+        milestone_rows=[_milestone_row(program="A")],
+        cp_rows=[], risk_rows=[], forward_rows=[],
+    )
+    # Find the S2 table id
+    ms_slide_id = next(
+        r["createSlide"]["objectId"] for r in reqs
+        if "createSlide" in r and "-2-ms-" in r["createSlide"]["objectId"]
+    )
+    table_id = f"{ms_slide_id}-table"
+    header_cells = [
+        r["insertText"]["text"] for r in reqs
+        if "insertText" in r
+        and r["insertText"].get("objectId") == table_id
+        and r["insertText"].get("cellLocation", {}).get("rowIndex") == 0
+    ]
+    assert "Program" not in header_cells
+    assert "Milestone" in header_cells
 
 
 def test_create_image_slide_has_create_image_request():

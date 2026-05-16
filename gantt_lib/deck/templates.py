@@ -43,12 +43,13 @@ STRATEGIC_BG = {"red": 0.92, "green": 0.95, "blue": 1.0}    # light blue
 
 
 # Max scope (program name) length when used inside a Slides objectId.
-# Worst-case derived id today is `{audience}-{scope}-{ts}-{nonce}-2-milestones-N-table`
-# = 1+1+scope+1+8+1+4+1+1+1+10+1+1+1+5 = 37 + scope. With scope ≤ 12 → ≤ 49 chars,
-# leaving 1 char of margin under the Slides API 50-char objectId cap.
-# Keep at 12: most program names are 5-8 chars; longer names get truncated
-# in objectIds only — full name still appears in slide titles.
-MAX_SCOPE_IN_ID = 12
+# Worst case is the per-program milestone slide ID (issue #6 design):
+# `{audience}-{scope}-{ts}-{nonce}-2-ms-{program}-{N}-table` puts the scope
+# AND a program name in the same id. With scope ≤ 10 → ≤ 50 chars (the cap).
+# All current programs fit under 10 chars (Tahoma=6, TPM90=5, Q3Launch=8,
+# OK2DC=5); longer names get truncated in objectIds only — full name still
+# appears in slide titles and table cells.
+MAX_SCOPE_IN_ID = 10
 
 
 def _id_safe_name(name: str) -> str:
@@ -456,20 +457,26 @@ def strategic_section_requests(
         ],
     ))
 
-    # S2: Milestone Slip Summary
-    # Milestone names truncated tighter than the 30-char default — at 8pt
-    # in a ~1.8" column, ~22 chars fit on a single line.
-    requests.extend(_create_table_slide(
-        f"{prefix}-2-milestones",
-        "Milestone Slip Summary",
-        ["Program", "Milestone", "Baseline Date", "Current Date", "Slip"],
-        [
-            [r.program, _truncate(r.name, n=20),
-             _date_str(r.baseline_end), _date_str(r.current_end),
-             _slip_str(r.slip)]
-            for r in milestone_rows
-        ],
-    ))
+    # S2: Milestone Slip Summary — one slide per program (no Program column).
+    # Drops a column → Milestone column gets ~2.25" instead of 1.8" → ~28 chars
+    # fit on one line at 8pt before wrapping, so truncation can relax to 28.
+    program_names = [r.program for r in portfolio_rows] or [scope]
+    by_program: dict[str, list[MilestoneSlipRow]] = {p: [] for p in program_names}
+    for r in milestone_rows:
+        by_program.setdefault(r.program, []).append(r)
+    for p in program_names:
+        p_rows = by_program.get(p, [])
+        requests.extend(_create_table_slide(
+            f"{prefix}-2-ms-{_id_safe_name(p)}",
+            f"Milestone Slip Summary — {p}",
+            ["Milestone", "Baseline Date", "Current Date", "Slip"],
+            [
+                [_truncate(r.name, n=28),
+                 _date_str(r.baseline_end), _date_str(r.current_end),
+                 _slip_str(r.slip)]
+                for r in p_rows
+            ],
+        ))
 
     # S3: Critical Path by Program
     requests.extend(_create_table_slide(
