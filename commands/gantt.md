@@ -1,11 +1,11 @@
 ---
 name: gantt
-description: Trigger the gantt skill to manage Jason's program plans in the portfolio workbook (recalc dates, shift tasks, view critical path, add/update tasks, etc.).
+description: Trigger the gantt skill to manage the user's program plans in their portfolio workbook (recalc dates, shift tasks, view critical path, add/update tasks, etc.).
 ---
 
 Use the `gantt` skill to handle the user's request. The user is asking about
-their program plans in the "Jason — Program Portfolio" workbook — task
-mutations, date cascade, critical path, status, or schema operations.
+their program plans in the portfolio workbook — task mutations, date
+cascade, critical path, status, or schema operations.
 
 Invoke the skill-bundled CLI at `<skill-base-dir>/scripts/gantt` directly via
 your Bash tool — the skill's base directory is provided at activation time

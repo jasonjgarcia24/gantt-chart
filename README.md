@@ -69,6 +69,47 @@ To pull a newer version later: **uninstall first then reinstall** (Claude Code's
 </details>
 
 <details>
+<summary><b>Migrating from a pre-self-contained-skill install</b></summary>
+
+If you installed gantt before the self-contained-skill refactor (the CLI used to live at `<plugin>/gantt` with a `~/.local/bin/gantt` symlink shimming it onto `$PATH`), do this one-time migration:
+
+```
+/gantt:init --remove
+/plugin marketplace update jason-gantt
+/plugin uninstall gantt@jason-gantt
+/plugin install gantt@jason-gantt
+/reload-plugins
+/gantt:init
+```
+
+`--remove` first (while the old install is still discoverable) clears the now-dangling `~/.local/bin/gantt` symlink. Then the standard upgrade dance pulls the new layout and re-runs setup against it.
+
+**What changes:**
+
+| Before | After |
+|---|---|
+| `<plugin>/gantt` (CLI on PATH via symlink) | `<plugin>/skills/gantt/scripts/gantt` (skill-bundled, no PATH entry) |
+| `<plugin>/.venv/` | `<plugin>/skills/gantt/.venv/` (rebuilt automatically by `/gantt:init` Gate 4) |
+| `<plugin>/gantt_lib/` | `<plugin>/skills/gantt/scripts/gantt_lib/` |
+| `<plugin>/requirements.txt` | `<plugin>/skills/gantt/scripts/requirements.txt` |
+| Permission: `Bash(gantt:*)` | Permission: `Bash(*/skills/gantt/scripts/gantt:*)` (merged during Gate 3) |
+| 8-gate `/gantt:init` (Gate 2 = CLI on PATH) | 7-gate `/gantt:init` (Gate 2 dropped) |
+
+**What stays put:**
+
+- All sheet data and your workbook in Google Drive.
+- OAuth credentials, token, config, and `.env` under `~/.config/gantt/`.
+- The `/gantt` short-form slash command alias (the symlink target didn't move).
+
+**What you stop being able to do:**
+
+- Running `gantt …` from your shell. The CLI is intentionally skill-local now — invoke everything through `/gantt` from Claude Code.
+
+The old `Bash(gantt:*)` permission entry in `~/.claude/settings.json` becomes inert (nothing matches it anymore) but doesn't hurt anything. Remove it manually if you want a clean settings file.
+
+</details>
+
+<details>
 <summary><b>Uninstall</b></summary>
 
 Three steps. The first cleans up the user-level shims init created; the next two remove the plugin and marketplace.
@@ -157,8 +198,10 @@ jq -s '
 Then complete OAuth + workbook bootstrap:
 
 ```bash
-gantt bootstrap
+./skills/gantt/scripts/gantt bootstrap
 ```
+
+After bootstrap, talk to `/gantt` from inside Claude Code — the skill picks up the bundled binary from `skills/gantt/scripts/gantt` automatically.
 
 </details>
 
@@ -176,7 +219,7 @@ Needed because the skill's `bootstrap` step writes to a Google Sheet on your beh
    mkdir -p ~/.config/gantt
    mv ~/Downloads/credentials.json ~/.config/gantt/credentials.json
    ```
-6. Run `/gantt:init` from Claude Code. Gate 6 will trigger the bootstrap (opens a browser for first-time consent) and create the workbook.
+6. Run `/gantt:init` from Claude Code. Gate 6 will ask you what to name the workbook in Drive (default: `Program Portfolio` — accept or override), then trigger the bootstrap (opens a browser for first-time consent) and create the sheet.
 
 After bootstrap, `/gantt info` (or `/gantt show me the workbook URL`) reports the sheet URL, OAuth state, and venv status.
 
@@ -194,11 +237,13 @@ Override the credentials path with `GANTT_CREDS=/path/to/credentials.json` if yo
 ## Usage (commands shipped so far)
 
 > **You drive these through the `/gantt` slash command, not from a shell.**
-> The CLI examples below (`./gantt program new TPM90` etc.) are the literal
-> commands the skill constructs and runs against the bundled binary at
-> `skills/gantt/scripts/gantt`. They're documented here so you can reason
-> about what the skill is doing — but you wouldn't type them yourself.
-> Talk to `/gantt` in natural language and it translates.
+> The CLI examples below (`./gantt program new TPM90` etc.) document the
+> shape of what the skill constructs and runs against the bundled binary —
+> the actual invocation is `<skill-base-dir>/scripts/gantt program new TPM90`.
+> `./gantt` is shorthand in the examples for readability; there is no
+> `gantt` on `$PATH` and no `./gantt` at the repo root after the
+> self-contained-skill refactor. Talk to `/gantt` in natural language and
+> it translates.
 
 ### Create a program
 
@@ -229,17 +274,17 @@ Override the credentials path with `GANTT_CREDS=/path/to/credentials.json` if yo
 
 ```bash
 ./gantt task add TPM90 "Define OKRs" \
-    --owner Jason --team PM --start 2026-06-01 --duration 5
+    --owner Alex --team PM --start 2026-06-01 --duration 5
 
 ./gantt task add TPM90 "Stakeholder interviews" \
-    --owner Jason --team Research --duration 10 --predecessors "1FS"
+    --owner Alex --team Research --duration 10 --predecessors "1FS"
 
 ./gantt task add TPM90 "Launch milestone" \
     --milestone --duration 0 --predecessors "2FS"
 
 # Sub-task: WBS id is auto-assigned as a child of --parent.
 ./gantt task add TPM90 "Draft OKR doc" \
-    --parent 1 --owner Jason --team PM --duration 2
+    --parent 1 --owner Alex --team PM --duration 2
 ```
 
 WBS ids auto-assign:
@@ -290,7 +335,7 @@ history. The *active baseline* for any task is the most recent row.
 # Freeze TPM90's current dates as the baseline of record.
 ./gantt baseline snapshot --program=TPM90
 # → gantt: baseline snapshot — TPM90, 12 tasks, 2026-05-14 ✓
-# Optional flags: --label="Q2 plan freeze", --actor=jason.garcia
+# Optional flags: --label="Q2 plan freeze", --actor=alex.smith
 # --all snapshots every program in the workbook in one pass.
 
 # Re-running on a program that already has a baseline refuses (exit 1):
@@ -554,6 +599,24 @@ places that touch gspread.
 - **Tree-style indent on Name (col C).** L1 = no prefix, L2 = `-- `,
   L3 = `---- `, etc. Stripped on read; re-applied on every write; backfilled
   on recalc when the displayed name doesn't match the level-derived form.
+
+### Adopted post-v0.5 — self-contained skill bundle
+- **CLI lives inside the skill, not on PATH.** The entrypoint and all of
+  `gantt_lib/` moved from the repo root to `skills/gantt/scripts/` so
+  `skills/gantt/` is the portable unit — drop that one folder anywhere and
+  it works. The bundled venv lives at `skills/gantt/.venv/`, keyed off the
+  entrypoint's `SKILL_DIR` (one level up from `scripts/`). No `~/.local/bin/gantt`
+  symlink is created or expected. **Why:** the skill is the user-facing surface;
+  having a separate shell CLI was scaffolding from when this started as a
+  CLI-first project and was no longer earning its complexity.
+- **Permission glob is path-based.** `settings.fragment.json` allows
+  `Bash(*/skills/gantt/scripts/gantt:*)` instead of the old bare `Bash(gantt:*)`.
+  The glob matches the marketplace install path wherever Claude Code puts it.
+- **Tests live at the repo root**, with a top-level `conftest.py` that
+  prepends `skills/gantt/scripts/` to `sys.path`. Tests continue to
+  `import gantt_lib.*` directly — they're not skill-aware.
+- **`/gantt:init` shrank from 8 gates to 7** by dropping the CLI-on-PATH gate.
+  Cleanup mode still removes legacy `~/.local/bin/gantt` symlinks if found.
 
 ---
 

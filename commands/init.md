@@ -35,7 +35,7 @@ At the end of a successful run, the user has:
 - Short-form `/gantt` slash command available alongside `/gantt:gantt`
 - Claude Code permissions merged so the skill can invoke its bundled CLI without per-call prompts
 - Google OAuth credentials installed and a valid token for Sheets + Drive + Slides scopes
-- Portfolio workbook (`Jason — Program Portfolio`) created with a seeded `_Config` tab
+- Portfolio workbook created in the user's Google Drive with a seeded `_Config` tab (workbook name is asked for in Gate 6; defaults to `Program Portfolio`)
 - A printed sheet URL the user can bookmark
 
 There is **no** `gantt` on `$PATH` — the CLI is intentionally skill-local. Drive it through the `/gantt` slash command, not from a shell.
@@ -234,12 +234,13 @@ Target: `$GANTT_CREDS` if set, else `~/.config/gantt/credentials.json`.
 - Probe: read `~/.config/gantt/config.json` and check for `sheet_id`.
 - If config exists with `sheet_id`: ✓ already bootstrapped. Print the URL.
 - If missing: print `→ fixing (running gantt bootstrap — opens browser for OAuth consent and creates the portfolio workbook)`.
-- Confirm with the user FIRST: *"About to open a browser for Google OAuth consent and create a new Google Sheet titled 'Jason — Program Portfolio'. Proceed? (Y/n)"* — workbook creation is a real side effect on the user's Drive.
+- Ask the user FIRST what to name the workbook: *"What would you like to name your portfolio workbook in Google Drive? (default: `Program Portfolio`)"* — accept their answer; if they reply with whitespace / nothing, use the default.
+- Then confirm: *"About to open a browser for Google OAuth consent and create a new Google Sheet titled '<chosen-title>'. Proceed? (Y/n)"* — workbook creation is a real side effect on the user's Drive.
 - On "yes":
   ```bash
-  "$GANTT_BIN" bootstrap
+  "$GANTT_BIN" bootstrap --title "<chosen-title>"
   ```
-  This blocks until the user completes OAuth in their browser. Capture the printed sheet URL.
+  Omit `--title` (the CLI defaults to `Program Portfolio`) if the user accepted the default. This blocks until the user completes OAuth in their browser. Capture the printed sheet URL.
 - On error: if `invalid_grant` or token issues, delete `~/.config/gantt/token.json` and re-run. Otherwise translate the error to one-sentence English.
 - Blocking: `✗` if bootstrap fails (Gate 7 verification can't run without a workbook).
 
@@ -314,7 +315,7 @@ echo "  ~/.config/gantt/credentials.json   ← OAuth client (sensitive — keepi
 echo "  ~/.config/gantt/token.json         ← OAuth refresh token (sensitive — re-bootstrap will re-prompt for consent)"
 echo "  ~/.config/gantt/config.json        ← Sheet ID + URL — deleting forces re-bootstrap (creates a NEW workbook; old one stays in your Drive)"
 echo "  ~/.claude/settings.json            ← Has gantt permission entries from setup Gate 3"
-echo "  Your portfolio workbook            ← 'Jason — Program Portfolio' stays in your Google Drive — delete from Drive UI if unwanted"
+echo "  Your portfolio workbook            ← stays in your Google Drive (whatever title you chose at bootstrap) — delete from Drive UI if unwanted"
 echo "  <PLUGIN_ROOT>/skills/gantt/.venv   ← Skill-local venv — gets removed when /plugin uninstall runs"
 echo ""
 echo "If you want full cleanup, manually:"
