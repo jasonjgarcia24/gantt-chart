@@ -20,6 +20,7 @@ from gantt_lib.deck.data import (
 from gantt_lib.deck.templates import (
     MAX_SCOPE_IN_ID,
     MAX_TABLE_ROWS_PER_SLIDE,
+    TABLE_CELL_PT,
     _create_bullets_slide,
     _create_divider_slide,
     _create_image_slide,
@@ -144,6 +145,44 @@ def test_create_table_slide_paginated_object_ids_unique():
     ]
     assert len(created) == len(set(created))
     assert all(i.startswith("tab-1") for i in ids)
+
+
+def test_create_table_slide_uses_small_cell_font():
+    """Cells use 8pt (TABLE_CELL_PT) — bigger fonts wrap and overflow (issue #6)."""
+    reqs = _create_table_slide(
+        "tab-1", "T", ["A", "B"], [["x", "y"]],
+    )
+    cell_styles = [
+        r["updateTextStyle"] for r in reqs
+        if "updateTextStyle" in r and "cellLocation" in r["updateTextStyle"]
+    ]
+    data_cell_styles = [
+        s for s in cell_styles if s["cellLocation"]["rowIndex"] >= 1
+    ]
+    assert data_cell_styles, "expected data-row cell styles"
+    for s in data_cell_styles:
+        assert s["style"]["fontSize"]["magnitude"] == TABLE_CELL_PT
+
+
+def test_strategic_milestone_names_get_tighter_truncation():
+    """S2 milestone names cap at ~20 chars, not the global 30 (issue #6)."""
+    long_name = "A" * 50
+    reqs, _ = strategic_section_requests(
+        "Portfolio", TODAY, "alice",
+        portfolio_rows=[],
+        milestone_rows=[_milestone_row(name=long_name)],
+        cp_rows=[],
+        risk_rows=[],
+        forward_rows=[],
+    )
+    milestone_cell_inserts = [
+        r["insertText"]["text"] for r in reqs
+        if "insertText" in r
+        and "cellLocation" in r["insertText"]
+        and r["insertText"]["text"].startswith("A")
+    ]
+    assert milestone_cell_inserts
+    assert all(len(t) <= 22 for t in milestone_cell_inserts), milestone_cell_inserts
 
 
 def test_create_image_slide_has_create_image_request():

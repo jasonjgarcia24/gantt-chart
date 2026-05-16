@@ -178,11 +178,17 @@ def _create_divider_slide(
     ]
 
 
-# Max data rows per table slide before pagination kicks in. With a 4" table
-# height and 9pt cell font, ~18 data rows + 1 header keeps each row at ~0.21"
-# (readable). Beyond that, the proportional row-sizing in the Slides API
-# clips text, and the table can extend past the 5.625" slide bottom edge.
-MAX_TABLE_ROWS_PER_SLIDE = 18
+# Max data rows per table slide before pagination kicks in. Slides API tables
+# auto-grow row height to fit wrapped cell text, so a single 2-line wrap can
+# push the table past the slide's 5.625" bottom edge. With a 4" table height
+# and 8pt cell font, ~12 data rows + 1 header keeps each row at ~0.31",
+# enough headroom for a 2-line wrap before overflow. Pair with TABLE_CELL_PT
+# (smaller font = fewer wraps) for a comfortable margin.
+MAX_TABLE_ROWS_PER_SLIDE = 12
+
+# Cell font size in table slides. 8pt fits ~22 chars in a 1.8" column before
+# wrapping; 9pt was ~16 chars and wrapped most milestone-style names.
+TABLE_CELL_PT = 8
 
 
 def _create_table_slide(
@@ -266,7 +272,7 @@ def _build_one_table_slide(
             requests.append({"updateTextStyle": {
                 "objectId": table_id,
                 "cellLocation": {"rowIndex": r + 1, "columnIndex": c},
-                "style": {"fontSize": {"magnitude": 9, "unit": "PT"}},
+                "style": {"fontSize": {"magnitude": TABLE_CELL_PT, "unit": "PT"}},
                 "textRange": {"type": "ALL"},
                 "fields": "fontSize",
             }})
@@ -451,12 +457,14 @@ def strategic_section_requests(
     ))
 
     # S2: Milestone Slip Summary
+    # Milestone names truncated tighter than the 30-char default — at 8pt
+    # in a ~1.8" column, ~22 chars fit on a single line.
     requests.extend(_create_table_slide(
         f"{prefix}-2-milestones",
         "Milestone Slip Summary",
         ["Program", "Milestone", "Baseline Date", "Current Date", "Slip"],
         [
-            [r.program, _truncate(r.name),
+            [r.program, _truncate(r.name, n=20),
              _date_str(r.baseline_end), _date_str(r.current_end),
              _slip_str(r.slip)]
             for r in milestone_rows
