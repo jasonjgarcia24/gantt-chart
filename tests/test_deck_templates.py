@@ -202,6 +202,44 @@ def test_tactical_section_has_six_create_slide_requests():
     assert create_slide_count == 6
 
 
+def test_tactical_back_to_back_calls_get_distinct_divider_ids():
+    """Re-runs on the same day must produce different objectIds (issue #2).
+
+    Slides batchUpdate rejects any slide objectId that already exists in the
+    file, so two same-day appends would 400 if the divider id were purely
+    deterministic. The per-call nonce prevents that.
+    """
+    a, _ = tactical_section_requests(
+        "TPM90", TODAY, "alice",
+        this_week_tasks=[], blockers_data=[],
+        cp_due_tasks=[], recent_tasks=[],
+        gantt_image_url="https://example/x",
+    )
+    b, _ = tactical_section_requests(
+        "TPM90", TODAY, "alice",
+        this_week_tasks=[], blockers_data=[],
+        cp_due_tasks=[], recent_tasks=[],
+        gantt_image_url="https://example/x",
+    )
+    a_ids = _all_object_ids(a)
+    b_ids = _all_object_ids(b)
+    assert a_ids.isdisjoint(b_ids)
+
+
+def test_strategic_back_to_back_calls_get_distinct_divider_ids():
+    a, _ = strategic_section_requests(
+        "Portfolio", TODAY, "alice",
+        portfolio_rows=[], milestone_rows=[],
+        cp_rows=[], risk_rows=[], forward_rows=[],
+    )
+    b, _ = strategic_section_requests(
+        "Portfolio", TODAY, "alice",
+        portfolio_rows=[], milestone_rows=[],
+        cp_rows=[], risk_rows=[], forward_rows=[],
+    )
+    assert _all_object_ids(a).isdisjoint(_all_object_ids(b))
+
+
 def test_tactical_section_object_ids_are_unique():
     """No two createShape/createTable/createImage/createSlide use the same objectId."""
     reqs, _ = tactical_section_requests(

@@ -5,14 +5,15 @@ Each helper returns the request list to create one slide of a specific shape
 `tactical_section_requests` and `strategic_section_requests` — compose them
 into a full appendable section: 1 divider + 5 content slides per audience.
 
-Object IDs are deterministic and unique within a section: prefix derived from
-audience + scope + date so the result-line URL anchor (Slides
-`#slide=id.<divider_id>`) is predictable, and re-running on the same day
-won't collide (the date timestamp differs across days, and re-running on the
-same day is intentional appending).
+Object IDs combine a human-readable prefix (audience + scope + date) with a
+per-call hex nonce. The prefix keeps the result-line URL anchor
+(`#slide=id.divider-<audience>-<scope>-<YYYYMMDD>-<nonce>`) recognizable,
+and the nonce guarantees uniqueness across same-day re-runs (the Slides
+`batchUpdate` API rejects any objectId that already exists in the file).
 """
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from typing import Optional
 
@@ -321,8 +322,9 @@ def tactical_section_requests(
     in slides_io.upload_image_to_drive).
     """
     ts = today.strftime("%Y%m%d")
-    divider_id = f"divider-tactical-{program_name}-{ts}"
-    prefix = f"t-{program_name}-{ts}"
+    nonce = uuid.uuid4().hex[:8]
+    divider_id = f"divider-tactical-{program_name}-{ts}-{nonce}"
+    prefix = f"t-{program_name}-{ts}-{nonce}"
 
     requests: list[dict] = []
     requests.extend(_create_divider_slide(
@@ -399,8 +401,9 @@ def strategic_section_requests(
     "Portfolio" for the all-programs default.
     """
     ts = today.strftime("%Y%m%d")
-    divider_id = f"divider-strategic-{scope}-{ts}"
-    prefix = f"s-{scope}-{ts}"
+    nonce = uuid.uuid4().hex[:8]
+    divider_id = f"divider-strategic-{scope}-{ts}-{nonce}"
+    prefix = f"s-{scope}-{ts}-{nonce}"
 
     requests: list[dict] = []
     requests.extend(_create_divider_slide(
