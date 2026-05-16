@@ -171,6 +171,23 @@ def cmd_deck(args: argparse.Namespace, ss, slides_svc, drive_svc) -> int:
     if not programs:
         _die("no usable programs after cascade — nothing to put in a deck")
 
+    # Warn (don't refuse) when programs lack baselines — slip / Δ columns
+    # will be empty and risk ranking degrades, but the deck itself is still
+    # useful (current dates, forward look, etc).
+    from .baseline import active_baselines
+    unbaselined = [
+        p.name for p in programs
+        if not active_baselines(all_baseline_rows, p.name)
+    ]
+    if unbaselined:
+        names = ", ".join(unbaselined)
+        print(
+            f"gantt: deck — no active baseline for {names}; "
+            f"slip / Δ columns will show '—'. "
+            f"Run `gantt baseline snapshot --program=<name>` to populate.",
+            file=sys.stderr,
+        )
+
     file_id, url = slides_io.find_or_bootstrap_yearly_file(
         slides_svc, audience, today.year,
     )

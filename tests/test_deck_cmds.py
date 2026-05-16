@@ -277,3 +277,41 @@ def test_result_line_url_includes_divider_anchor(
     assert "deck appended" in out
     assert "#slide=id.div-T-TPM90-" in out
     assert "✓" in out
+
+
+def test_warns_when_targeted_program_has_no_baseline(
+    tmp_config, services, small_program, capsys,
+):
+    """Issue #4: deck should warn (not refuse) when a targeted program has no baseline."""
+    slides, drive = services
+    ss = _make_workbook(programs={"TPM90": small_program})  # no _Baselines tab
+    deck_cmds.cmd_deck(
+        _make_args(audience="strategic", program="TPM90"), ss, slides, drive,
+    )
+    err = capsys.readouterr().err
+    assert "no active baseline for TPM90" in err
+    assert "gantt baseline snapshot" in err
+
+
+def test_no_warning_when_baseline_exists(
+    tmp_config, services, small_program, capsys,
+):
+    """No warning when targeted program is baselined."""
+    from gantt_lib.baseline import BASELINE_HEADERS, BaselineRow
+    from gantt_lib.baseline_io import baseline_row_to_cells
+    slides, drive = services
+    ss = _make_workbook(programs={"TPM90": small_program})
+    bws = FakeWorksheet("_Baselines", sheet_id=999)
+    bws.update(range_name="A1", values=[BASELINE_HEADERS])
+    bws.update(range_name="A2", values=[baseline_row_to_cells(BaselineRow(
+        program="TPM90", wbs="1", task_name="Concept",
+        snapshot_date=date(2026, 5, 11),
+        baseline_start=date(2026, 5, 11), baseline_end=date(2026, 5, 13),
+        baseline_duration=3,
+    ))])
+    ss.add_existing_worksheet(bws)
+    deck_cmds.cmd_deck(
+        _make_args(audience="strategic", program="TPM90"), ss, slides, drive,
+    )
+    err = capsys.readouterr().err
+    assert "no active baseline" not in err
