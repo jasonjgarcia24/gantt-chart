@@ -961,6 +961,16 @@ def cmd_deck(args: argparse.Namespace) -> int:
     return deck_cmds.cmd_deck(args, ss, slides_svc, drive_svc)
 
 
+# ---------- Linear pull ----------
+# Same wrapper pattern as baseline + deck: handler logic in
+# gantt_lib/linear_cmds.py for testability. The agent fetches Linear via
+# MCP and pipes a normalized payload to this command's stdin.
+
+def cmd_linear_pull(args: argparse.Namespace) -> int:
+    from gantt_lib import linear_cmds
+    return linear_cmds.cmd_linear_pull(args, _open_workbook())
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     cfg = read_config()
     print(f"gantt: bundle  {BUNDLE_DIR}")
@@ -1274,6 +1284,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="model for narrative generation when enabled (default: haiku)",
     )
     p_deck.set_defaults(func=cmd_deck)
+
+    # ---------- Linear pull (Phase 1: read-only) ----------
+
+    p_lp = sub.add_parser(
+        "linear-pull",
+        help="pull a Linear project into a program tab (agent pipes payload via stdin)",
+    )
+    p_lp.add_argument(
+        "--stdin", action="store_true", required=True,
+        help="read the normalized Linear payload as JSON from stdin (required)",
+    )
+    p_lp.add_argument(
+        "--as", dest="program", required=True,
+        help="target program short name (becomes tab P_<name>)",
+    )
+    p_lp.add_argument(
+        "--dry-run", action="store_true",
+        help="compute and print the diff without writing to the workbook",
+    )
+    p_lp.add_argument(
+        "--force", action="store_true",
+        help=(
+            "drop existing _LinearSync rows for this program first "
+            "(every Linear issue is treated as new; workbook rows are preserved)"
+        ),
+    )
+    p_lp.set_defaults(func=cmd_linear_pull)
 
     return parser
 
