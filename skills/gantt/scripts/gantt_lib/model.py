@@ -76,6 +76,13 @@ class Task:
     predecessors: str = ""
     milestone: bool = False
     notes: str = ""
+    # Non-column metadata used only at write-time by the Linear-pull path
+    # to wrap the name column as a Sheets HYPERLINK formula pointing at
+    # the Linear issue. Not read from the sheet (gspread returns the
+    # rendered display text on read, so from_row never sees this).
+    # Excluded from equality and repr so existing tests that build Tasks
+    # without it continue to compare correctly.
+    linear_url: Optional[str] = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_row(cls, row: Iterable[str]) -> "Task":

@@ -29,10 +29,28 @@ def indent_prefix(level: int) -> str:
     return "--" * (level - 1) + " "
 
 
+def _hyperlink_formula(url: str, display_text: str) -> str:
+    """Build a Sheets =HYPERLINK formula. Escapes double quotes per Sheets
+    string-literal rules (`"` → `""`) so titles with quotes don't break
+    the formula parser."""
+    escaped_url = url.replace('"', '""')
+    escaped_text = display_text.replace('"', '""')
+    return f'=HYPERLINK("{escaped_url}", "{escaped_text}")'
+
+
 def _indented_row(task: Task) -> list[str]:
-    """Build the data row with col C name prefixed by the task's level indent."""
+    """Build the data row with col C name prefixed by the task's level indent.
+
+    When the task carries a `linear_url` (set by the Linear-pull path),
+    col C is written as a `=HYPERLINK(linear_url, indented_title)` formula
+    so the cell is clickable. Otherwise it's the plain indented title.
+    """
     row = task.to_row()
-    row[2] = indent_prefix(task.level) + task.name
+    indented = indent_prefix(task.level) + task.name
+    if task.linear_url:
+        row[2] = _hyperlink_formula(task.linear_url, indented)
+    else:
+        row[2] = indented
     return row
 
 

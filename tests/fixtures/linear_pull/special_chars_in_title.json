@@ -1,0 +1,13 @@
+{
+  "project": {"name": "SpecialChars", "source": "linear"},
+  "config": {"default_duration_days": 1, "today": "2026-05-18"},
+  "issues": [
+    {
+      "linear_id": "TPM-Q",
+      "title": "Title with \"quotes\" and em—dash and 🚀 emoji",
+      "estimate_days": 3,
+      "linear_url": "https://linear.app/x/issue/TPM-Q"
+    }
+  ],
+  "edges": []
+}
