@@ -1,0 +1,13 @@
+{
+  "project": {"name": "FanIn", "source": "linear"},
+  "config": {"default_duration_days": 1, "today": "2026-05-18"},
+  "issues": [
+    {"linear_id": "TPM-A", "title": "A (short)", "estimate_days": 2},
+    {"linear_id": "TPM-B", "title": "B (long)", "estimate_days": 10},
+    {"linear_id": "TPM-C", "title": "C (joins A and B)", "estimate_days": 3}
+  ],
+  "edges": [
+    {"from_linear_id": "TPM-A", "to_linear_id": "TPM-C", "type": "FS", "lag_days": 0},
+    {"from_linear_id": "TPM-B", "to_linear_id": "TPM-C", "type": "FS", "lag_days": 0}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "project": {"name": "FanOut", "source": "linear"},
+  "config": {"default_duration_days": 1, "today": "2026-05-18"},
+  "issues": [
+    {"linear_id": "TPM-A", "title": "A (predecessor)", "estimate_days": 4},
+    {"linear_id": "TPM-B", "title": "B (long branch)", "estimate_days": 10},
+    {"linear_id": "TPM-C", "title": "C (short branch)", "estimate_days": 2}
+  ],
+  "edges": [
+    {"from_linear_id": "TPM-A", "to_linear_id": "TPM-B", "type": "FS", "lag_days": 0},
+    {"from_linear_id": "TPM-A", "to_linear_id": "TPM-C", "type": "FS", "lag_days": 0}
+  ]
+}

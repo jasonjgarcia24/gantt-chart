@@ -1,0 +1,6 @@
+{
+  "project": {"name": "Empty", "source": "linear"},
+  "config": {"default_duration_days": 1, "today": "2026-05-18"},
+  "issues": [],
+  "edges": []
+}

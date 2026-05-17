@@ -1,0 +1,12 @@
+{
+  "project": {"name": "Cycle", "source": "linear"},
+  "config": {"default_duration_days": 1, "today": "2026-05-18"},
+  "issues": [
+    {"linear_id": "TPM-A", "title": "A", "estimate_days": 2},
+    {"linear_id": "TPM-B", "title": "B", "estimate_days": 2}
+  ],
+  "edges": [
+    {"from_linear_id": "TPM-A", "to_linear_id": "TPM-B", "type": "FS", "lag_days": 0},
+    {"from_linear_id": "TPM-B", "to_linear_id": "TPM-A", "type": "FS", "lag_days": 0}
+  ]
+}

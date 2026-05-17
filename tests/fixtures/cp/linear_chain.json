@@ -1,0 +1,13 @@
+{
+  "project": {"name": "Chain", "source": "linear", "source_ref": "https://linear.app/x/project/chain"},
+  "config": {"default_duration_days": 1, "today": "2026-05-18"},
+  "issues": [
+    {"linear_id": "TPM-1", "title": "A", "estimate_days": 5},
+    {"linear_id": "TPM-2", "title": "B", "estimate_days": 8},
+    {"linear_id": "TPM-3", "title": "C", "estimate_days": 3}
+  ],
+  "edges": [
+    {"from_linear_id": "TPM-1", "to_linear_id": "TPM-2", "type": "FS", "lag_days": 0},
+    {"from_linear_id": "TPM-2", "to_linear_id": "TPM-3", "type": "FS", "lag_days": 0}
+  ]
+}
