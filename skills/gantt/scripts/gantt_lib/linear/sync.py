@@ -265,6 +265,12 @@ def _apply_pull_writes(
         # in cp/adapter on initial pull, but for mid-sync pull_new we
         # default to top-level).
         new_wbs = next_wbs_id(workbook_tasks)
+        # Anchor: mirror cp/adapter behavior — if no Linear startedAt
+        # and no blockers, default to today so cascade doesn't refuse
+        # the next recalc with UnanchoredError. Issues with blockers
+        # in Linear will get their start from cascade once the
+        # predecessor reference is wired up.
+        start = issue.start_anchor or payload.config.today
         new_task = Task(
             id=new_wbs,
             level=1,
@@ -273,7 +279,7 @@ def _apply_pull_writes(
             duration=int(issue.estimate_days) if issue.estimate_days else 0,
             status=issue.state,
             milestone=issue.is_milestone,
-            start=issue.start_anchor,
+            start=start,
             end=issue.end_anchor,
         )
         new_task.linear_url = issue.linear_url or None

@@ -67,11 +67,24 @@ class FieldClassification(str, Enum):
 # carry a value for these. Sidecar-only fields (sidecar_predecessors,
 # sidecar_percent, sidecar_notes, sidecar_team) live workbook-side
 # only and never participate in cross-side merge.
+#
+# NOTE: `due_date` is intentionally absent. Workbook `task.end` is a
+# cascade-computed projection that the engine rewrites every recalc;
+# Linear `dueDate` is a user-set hard commitment target. Merging
+# them in EITHER direction is broken:
+#   - Push: writes computed projections to Linear as commitments
+#     (loops on every cascade recompute)
+#   - Pull: empty Linear dueDate wipes workbook's cascade-computed
+#     end (was discovered live during P2-T10 acceptance — broke the
+#     gantt bars + default-team CF coloring on LINEAR_TEST)
+# Phase 2 v1: due_date is excluded from the cross-side merge entirely.
+# See GH issue #7 for the Phase 2.1 revisit (Task gets a
+# `manual_end_anchor: bool` distinguishing user-set hard dates from
+# cascade outputs; that lets us round-trip dueDate the right way).
 MERGEABLE_FIELDS: tuple[str, ...] = (
     "title",
     "state",
     "assignee",
-    "due_date",
     "estimate",
     "blockedby",
     "parent",
