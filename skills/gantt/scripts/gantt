@@ -975,6 +975,17 @@ def cmd_linear_pull(args: argparse.Namespace) -> int:
     return linear_cmds.cmd_linear_pull(args, _open_workbook())
 
 
+def cmd_linear_sync(args: argparse.Namespace) -> int:
+    from gantt_lib import linear_cmds
+    return linear_cmds.cmd_linear_sync(args, _open_workbook())
+
+
+def cmd_linear_push(args: argparse.Namespace) -> int:
+    """Alias for `gantt linear-sync --direction=push`."""
+    args.direction = "push"
+    return cmd_linear_sync(args)
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     cfg = read_config()
     print(f"gantt: bundle  {BUNDLE_DIR}")
@@ -1315,6 +1326,56 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_lp.set_defaults(func=cmd_linear_pull)
+
+    # ---------- Linear sync (Phase 2: full bidirectional) ----------
+
+    p_lsync = sub.add_parser(
+        "linear-sync",
+        help="bidirectional sync: pull Linear → workbook, push workbook → Linear (agent dispatches MCP)",
+    )
+    p_lsync.add_argument(
+        "--stdin", action="store_true", required=True,
+        help="read the normalized Linear payload as JSON from stdin (required)",
+    )
+    p_lsync.add_argument(
+        "--as", dest="program", required=True,
+        help="target program short name",
+    )
+    p_lsync.add_argument(
+        "--dry-run", action="store_true",
+        help="compute the diff + MCP request list without writing",
+    )
+    p_lsync.add_argument(
+        "--direction", choices=["pull", "push", "both"], default="both",
+        help="restrict sync to one direction (default: both)",
+    )
+    p_lsync.add_argument(
+        "--force", action="store_true",
+        help="drop existing _LinearSync rows; treat all Linear issues as new",
+    )
+    p_lsync.set_defaults(func=cmd_linear_sync)
+
+    p_lpush = sub.add_parser(
+        "linear-push",
+        help="alias for `linear-sync --direction=push`",
+    )
+    p_lpush.add_argument(
+        "--stdin", action="store_true", required=True,
+        help="read the normalized Linear payload as JSON from stdin (required)",
+    )
+    p_lpush.add_argument(
+        "--as", dest="program", required=True,
+        help="target program short name",
+    )
+    p_lpush.add_argument(
+        "--dry-run", action="store_true",
+        help="compute the diff + MCP request list without writing",
+    )
+    p_lpush.add_argument(
+        "--force", action="store_true",
+        help="drop existing _LinearSync rows; treat all Linear issues as new",
+    )
+    p_lpush.set_defaults(func=cmd_linear_push)
 
     return parser
 
