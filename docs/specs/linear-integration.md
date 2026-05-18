@@ -3,7 +3,7 @@
 **Status:** Draft, awaiting user approval
 **Date:** 2026-05-16
 **Builds on:** all of v0.5 (workbook + cascade + critical path + decks)
-**Phases:** 1 (pull Linear → workbook tab) → 2 (push workbook → Linear) → 3 (bidirectional sync)
+**Phases:** 1 (pull Linear → workbook tab, **shipped**) → 2 (full bidirectional sync: pull + push + create + archive, with 3-way merge)
 
 ## Objective
 
@@ -320,25 +320,153 @@ library layer (`gantt_lib/cp/` + `gantt_lib/linear/`) + `_LinearSync`
 hidden tab + SKILL.md playbook + tests. After Phase 1, every existing
 gantt verb works on Linear-pulled programs.
 
-### Phase 2 — Push workbook changes back to Linear
+### Phase 2 — Full bidirectional sync (pull + push + create + archive)
 
-`gantt linear-push <program> [--dry-run]`. Updates Linear issues from
-workbook state: state, assignee, dueDate, blockedBy relations. Sidecar
-block in issue descriptions for workbook-only fields (signed lag,
-non-FS relation types, percent_complete). Conflict policy: per-field
-last-modified wins.
+The single user-facing entry point: `gantt linear-sync <program>
+[--dry-run] [--direction=pull|push|both]`. Default direction is `both`:
+the agent pulls Linear state, computes a 3-way diff against the stored
+snapshot, and applies the resolved changes to whichever side(s) need
+updating. Existing `linear-pull` stays as a Phase-1-compatible
+read-only entry point but becomes a thin alias for
+`linear-sync --direction=pull`.
 
-Why sidecar-in-Linear-description gets reintroduced in Phase 2: that's
-the *first* time the workbook is asked to round-trip workbook-only data
-through Linear. Phase 1 doesn't need it because it only reads.
+In scope:
+- **Updates** to existing linked issues (already covered conceptually by
+  Phase 1's pull, plus the reverse direction): name, state, assignee,
+  dueDate, milestone, blockedBy graph
+- **New issues**: workbook rows added since last sync (`linear_id`
+  empty in `_LinearSync`) get a new Linear issue created; the assigned
+  ID is written back to `_LinearSync`
+- **Archives**: workbook rows deleted since last sync (`linear_id`
+  present in `_LinearSync` but no matching workbook row) trigger
+  archiving the Linear issue (state set to a canceled-type state +
+  optionally `archivedAt` if the MCP exposes it)
+- **Sidecar metadata**: workbook-only fields (signed lag, non-FS
+  relations, %complete, workbook-only notes) stored sheet-side in
+  extended `_LinearSync` columns — see schema below
 
-### Phase 3 — Bidirectional sync
+Out of scope (Phase 2):
+- Linear→workbook propagation of comments, attachments, sub-issue
+  reordering within a parent, Cycle assignment
+- Multi-PM concurrent sync (single-writer assumed; race detection is a
+  follow-up if needed)
+- Auto-scheduled background sync (manual invocation only)
 
-`gantt linear-sync <program>`. Three-way merge using
-`_LinearSync.last_synced` as the watermark. Conflicts surfaced
-field-by-field with user prompts. Diff-based: only issues whose
-`updatedAt` is newer than `last_synced` (on either side) are touched,
-so agent turn count stays bounded.
+### Sidecar + snapshot schema (sheet-side, in extended `_LinearSync`)
+
+The Phase 1 `_LinearSync` tab is extended with columns to carry both
+the sidecar (workbook-only fields Linear can't represent) and the
+3-way-merge snapshot (last-known-Linear-state per field).
+
+| Col | Field | Source | Purpose |
+|---|---|---|---|
+| A | program | (existing) | linkage |
+| B | wbs_id | (existing) | linkage |
+| C | linear_id | (existing) | linkage |
+| D | last_synced | (existing) | ISO timestamp; updated on every successful sync touch |
+| E | linear_url | (existing) | convenience deep-link |
+| F | sidecar_predecessors | workbook | full predecessor DSL with relation type + signed lag (workbook-only beyond Linear's bare blockedBy) |
+| G | sidecar_percent | workbook | %complete (Linear doesn't carry) |
+| H | sidecar_notes | workbook | workbook Notes column (Linear doesn't carry) |
+| I | sidecar_team | workbook | workbook Team column (Linear doesn't carry) |
+| J | snapshot_title | linear@sync | last-known Linear title |
+| K | snapshot_state | linear@sync | last-known Linear state name |
+| L | snapshot_state_type | linear@sync | last-known Linear state type (one of backlog/unstarted/started/completed/canceled) |
+| M | snapshot_assignee | linear@sync | last-known Linear assignee email |
+| N | snapshot_due_date | linear@sync | last-known Linear dueDate (ISO) |
+| O | snapshot_estimate | linear@sync | last-known Linear estimate (raw value, e.g. `5` for 5 points) |
+| P | snapshot_blockedby | linear@sync | last-known Linear blockedBy as comma-separated linear_ids |
+| Q | snapshot_parent | linear@sync | last-known Linear parentId |
+| R | snapshot_milestone | linear@sync | last-known Linear milestone (id of project milestone, if any) |
+
+Row layout: header row 1 + DO-NOT-EDIT warning row 2 (existing) +
+data rows 3+. The extension is additive — existing Phase 1 rows
+expand to the new column count on first Phase-2 sync (a one-time
+migration backfills columns F-R from the next pull).
+
+### 3-way merge — per-field conflict resolution
+
+For every linked issue and every reconciled field, the agent (and CLI
+helpers) compare three values:
+
+- **W** = current workbook value
+- **S** = stored snapshot value (`snapshot_*` column)
+- **L** = current Linear value
+
+| W vs S | L vs S | Action |
+|---|---|---|
+| equal | equal | no-op (no drift) |
+| changed | equal | push W → Linear (workbook-side edit only) |
+| equal | changed | pull L → workbook (Linear-side edit only) |
+| changed | changed, W==L | converged independently; no-op, just refresh snapshot |
+| changed | changed, W≠L | CONFLICT — apply per-field default policy below; for adversarial fields, surface to user with proposed resolution + override prompt |
+
+**Per-field default policy on true conflicts** (when both sides changed
+to different values):
+
+| Field | Default winner | Reasoning |
+|---|---|---|
+| `title` | Linear | Linear is the authoritative description for the team |
+| `state` / `state_type` | Linear | Linear is the team's execution surface |
+| `assignee` | Linear | Same |
+| `dueDate` | Linear | Same |
+| `parent` | Linear | Structural changes happen in Linear UI |
+| `milestone` | Linear | Same |
+| `predecessors` / blockedBy | Workbook | Workbook holds the full DSL (relation type + signed lag) Linear can't express |
+| `percent` | Workbook | Linear doesn't carry %complete |
+| `notes` | Workbook | Linear doesn't carry workbook Notes |
+| `team` | Workbook | Linear has labels, not a per-issue team field |
+| `estimate` / `duration` | Workbook (if workbook value non-default) | The user often refines estimates post-pull; never silently overwrite |
+
+After applying the per-field winner, the snapshot column is refreshed
+to the post-merge Linear value so the next sync sees no drift.
+
+The `--dry-run` mode surfaces every detected change with its
+classification (push / pull / converged / conflict-resolved) and the
+proposed action; the user reviews before applying.
+
+### Phase 2 — Create + archive paths
+
+**Create**: a workbook row with a `linear_id` of empty string AND no
+matching row in `_LinearSync` is classified as `workbook_only`. On
+sync (push direction), the agent calls `save_issue` to create a new
+Linear issue with the workbook's `title`, `team` (resolved to a
+Linear project — defaults to the program's bound project from
+`config.linear` block; user is prompted if ambiguous), `assignee`,
+`estimate`, `parentId`. The returned Linear ID is written back to
+`_LinearSync` and the workbook row's name cell is rewrapped as a
+HYPERLINK formula. Predecessors (`blockedBy`) are reconciled in a
+second pass after all new issues have IDs.
+
+**Archive**: a `_LinearSync` row whose `linear_id` no longer matches
+any workbook row is classified as `workbook_deleted`. On sync (push
+direction), the agent confirms with the user (single batched prompt
+showing all deletions), then calls `save_issue` with `state` set to
+the team's canceled-type state. The `_LinearSync` row stays as a
+tombstone with `last_synced` set to the archive timestamp; future
+syncs treat it as `archived` and skip it.
+
+Both create and archive paths are gated behind explicit user
+confirmation in the dry-run preview — never silent.
+
+### Phase 2 — CLI surface
+
+New subcommands:
+
+- `gantt linear-sync <program> [--dry-run] [--direction=pull|push|both]`
+  - `--dry-run`: compute the diff, surface it, do not write
+  - `--direction=pull`: only apply pull-direction changes (equivalent
+    to Phase 1's `linear-pull`)
+  - `--direction=push`: only apply push-direction changes
+  - `--direction=both` (default): apply both, with conflict resolution
+  - Always pipes a normalized payload via `--stdin` like `linear-pull`
+- `gantt linear-push <program>` (convenience alias for
+  `linear-sync --direction=push`)
+- `gantt linear-pull <program>` stays as Phase-1-compatible alias for
+  `linear-sync --direction=pull`
+
+Result line shape:
+`gantt: linear-sync <program> — N pushed, M pulled, K created, J archived, C conflicts resolved, U unchanged ✓`
 
 ## Out of scope (all phases)
 
@@ -350,6 +478,13 @@ so agent turn count stays bounded.
   derivable from milestones, not separately modeled
 - Sub-day granularity in cascade math
 - Per-team calendars (working days remain global)
+- Multi-PM concurrent sync of the same program (single-writer model
+  assumed; if two PMs sync the same program simultaneously, the
+  later writer's `last_synced` timestamp wins per-row — no
+  cross-PM merge)
+- Auto-scheduled / background sync (Phase 2 is manual via
+  `gantt linear-sync`; a daemon/cron wrapper would be a separate
+  follow-up)
 - Showing the Linear ID inline as separate text on each row (we add a
   hyperlink on the task name instead — clicking opens the issue. A
   visible inline Linear-ID column is a Phase 2+ UX add if wanted)
@@ -490,6 +625,58 @@ look when scanning a program tab. Mitigated by wrapping the task name
 cell as a Sheets `HYPERLINK(linear_url, title)` formula on pull writes
 — the name stays human-readable but becomes a one-click jump to the
 Linear issue. The mapping table above documents the formula shape.
+
+### Phase 2 design decisions (locked 2026-05-17)
+
+After Phase 1 shipped, three architectural forks were settled before
+drafting the Phase 2 spec. Each is captured here because they reshape
+the body of the spec and may need to be revisited if real-world use
+surfaces problems.
+
+**Decision 1 — Sidecar location: sheet-side (extended `_LinearSync` columns).**
+
+Options considered:
+- *Linear-side* (original spec): hidden `<!-- gantt:v1 ... -->` block in
+  each Linear issue description footer. Cost: one MCP `save_issue` per
+  changed issue, N turns per sync. Visible to teammates as raw HTML.
+- *Sheet-side*: extend `_LinearSync` with workbook-only-field columns
+  (predecessors-DSL, percent, notes, team). Cost: one Sheets write per
+  sync regardless of issue count. Invisible to non-gantt Linear users.
+- *Both* (sheet authoritative, Linear mirror): highest cost, best
+  cross-team visibility.
+
+Chosen: **sheet-side.** The Phase-1 round-trip experience showed that
+MCP write turns scale O(N) and the agent-turn budget is the real cost
+cap. Sheet-side keeps Linear clean (no machine-generated HTML in
+descriptions) and keeps sync turn count at O(N) only for actual
+field-update writes, not metadata maintenance. The visibility
+trade-off (teammates don't see workbook-only fields in Linear) is
+acceptable because those fields are gantt-specific concepts that
+Linear users don't act on anyway.
+
+**Decision 2 — Push scope: full bidirectional (updates + create + archive).**
+
+The original spec split this across Phase 2 (push updates) and
+Phase 3 (full sync). Locked the merged scope to avoid a future
+migration: anyone using Phase 2 will eventually want create/archive
+too, and shipping the snapshot machinery once is cheaper than once
+for push-only and again for create/archive.
+
+**Decision 3 — Conflict detection: snapshot-diff with 3-way merge.**
+
+Options considered:
+- *Workbook-wins*: push always overwrites Linear. Simple but clobbers
+  Linear-side edits between syncs.
+- *Per-issue prompt*: surface every divergence; user picks per
+  issue. High UX cost.
+- *Snapshot-diff* (chosen): store `last_known_linear_state` per issue
+  in `_LinearSync`; 3-way compare on sync; per-field default winners
+  with prompt only for true conflicts (both sides changed to
+  different values).
+
+Sheet schema reserves columns J-R for the snapshot — see the spec
+body. Snapshot is refreshed on every successful sync touch so the
+next sync starts from a clean baseline.
 
 ### Reversibility plan
 
