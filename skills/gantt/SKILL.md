@@ -1,6 +1,6 @@
 ---
 name: gantt
-description: Operate the user's program portfolio workbook in Google Sheets via the skill-bundled `gantt` CLI at scripts/gantt (under this skill's base directory). USE THIS SKILL whenever the user mentions any of — program plans, program tabs (named like P_TPM90, P_Q3Launch — short program tokens), task progress updates ("OK2DC is 50% done", "task 1.2 is complete", "mark X done"), task scheduling or duration changes ("the eyepiece fab task should be 8 days not 5"), dependencies / predecessors (FS / SS / FF / SF, "depends on", "after task 2"), shifting tasks ("push the launch milestone out 2 weeks", "pull task 5 in by 3 days"), recalculating dates after sheet edits ("I edited a few rows, recalc TPM90"), critical-path queries on the workbook ("what's the critical path in TPM90", "what tasks are blocked"), creating a new program ("create a new program called Q3Launch"), milestones in the workbook, or ANY task referenced by WBS id (e.g. 1, 5.2, OK2DC). When the user refers to a program by a short token (e.g. TPM90, Q3Launch), this skill applies. ALSO triggers on Linear pulls (Phase 1): "pull the X Linear project into a gantt chart", "refresh TPM90 from Linear", "create a gantt chart from the Linear project X", "pull from Linear" — anything that maps a Linear project's issues into a program tab. Linear URLs (linear.app) or team-key prefixes (e.g. "JAS-5") also count. Capabilities: add / update / delete tasks; cascade dates via topo sort + working-days math; auto-derive Status from %complete + dependencies; shift tasks ±N working days; compute critical path with bold highlighting; sort rows by WBS id; snapshot and inspect baselines; generate audience-targeted Google Slides decks; pull a Linear project into a program tab via the Linear MCP (read-only against Linear in Phase 1). Does NOT handle: gantt visualizations in matplotlib / plotly / Python libraries (those use the libraries directly); metaphorical critical-path / milestone language (hiring, standups, meetings); writes back to Linear (push/sync are Phase 2+); Asana / Jira / Trello (other PM tools); calendar scheduling (standups, meetings, milestone-review events); generic PM-vocabulary questions ("what does FS mean"); arbitrary Google Sheets unrelated to the portfolio workbook.
+description: Operate the user's program portfolio workbook in Google Sheets via the skill-bundled `gantt` CLI at scripts/gantt (under this skill's base directory). USE THIS SKILL whenever the user mentions any of — program plans, program tabs (named like P_TPM90, P_Q3Launch — short program tokens), task progress updates ("OK2DC is 50% done", "task 1.2 is complete", "mark X done"), task scheduling or duration changes ("the eyepiece fab task should be 8 days not 5"), dependencies / predecessors (FS / SS / FF / SF, "depends on", "after task 2"), shifting tasks ("push the launch milestone out 2 weeks", "pull task 5 in by 3 days"), recalculating dates after sheet edits ("I edited a few rows, recalc TPM90"), critical-path queries on the workbook ("what's the critical path in TPM90", "what tasks are blocked"), creating a new program ("create a new program called Q3Launch"), milestones in the workbook, or ANY task referenced by WBS id (e.g. 1, 5.2, OK2DC). When the user refers to a program by a short token (e.g. TPM90, Q3Launch), this skill applies. ALSO triggers on Linear sync (Phase 2: bidirectional): "sync TPM90 with Linear", "push my TPM90 changes to Linear", "create new Linear issues for the tasks I added", "what's different between TPM90 and Linear", "pull the X Linear project into a gantt chart", "refresh TPM90 from Linear", "create a gantt chart from the Linear project X" — anything that maps a Linear project's issues to or from a program tab. Linear URLs (linear.app) or team-key prefixes (e.g. "JAS-5") also count. Capabilities: add / update / delete tasks; cascade dates via topo sort + working-days math; auto-derive Status from %complete + dependencies; shift tasks ±N working days; compute critical path with bold highlighting; sort rows by WBS id; snapshot and inspect baselines; generate audience-targeted Google Slides decks; sync a Linear project bidirectionally with a program tab via the Linear MCP (pull + push + create + archive with 3-way merge). Does NOT handle: gantt visualizations in matplotlib / plotly / Python libraries (those use the libraries directly); metaphorical critical-path / milestone language (hiring, standups, meetings); Asana / Jira / Trello (other PM tools); calendar scheduling (standups, meetings, milestone-review events); generic PM-vocabulary questions ("what does FS mean"); arbitrary Google Sheets unrelated to the portfolio workbook.
 tools: Bash
 ---
 
@@ -75,24 +75,29 @@ The user describes operations conversationally; translate to flags.
 - **Default `--team`:** leave blank if not specified. Do not invent values.
 - **Mutations auto-cascade.** `task add`, `task update`, and `shift` print TWO lines (mutation + recalc). Surface both.
 
-## Linear MCP mode (Phase 1: pull only)
+## Linear MCP mode — sync (push + pull + create + archive)
 
-When the user wants to pull a Linear project into the workbook, route to
-this mode. After the pull, every existing gantt verb (`recalc`,
-`critical-path`, `deck`, `baseline`, `shift`, etc.) works on the pulled
-program identically to a workbook-native one.
+When the user wants to sync workbook state with a Linear project — pull
+Linear changes in, push workbook changes out, create new Linear issues
+for workbook-only tasks, or archive Linear issues for deleted workbook
+rows — route to this mode. After the sync, the workbook and Linear
+agree per the 3-way merge conflict policy.
 
-**Phase 1 is read-only against Linear.** No writes are made to Linear
-issues, descriptions, relations, or anything else. Push/sync are Phase 2+.
+`gantt linear-sync <program>` is the primary entry point. The
+Phase-1 `gantt linear-pull <program>` still works (read-only pull) as
+a backwards-compat alias for the pull-direction-only path.
 
 ### Trigger language
 
-Prompts that should route to Linear pull mode:
+Prompts that should route to Linear sync mode:
 
+- "sync TPM90 with Linear"
 - "pull the X Linear project into a gantt chart [called TPM90]"
 - "refresh TPM90 from Linear"
+- "push my TPM90 changes to Linear"
+- "create new Linear issues for the tasks I added to TPM90"
+- "what's different between TPM90 and Linear"
 - "create a gantt chart from the Linear project X"
-- "pull the Linear project at linear.app/.../<slug>"
 - any URL of the form `https://linear.app/<workspace>/project/<slug>`
 - any prompt that mentions Linear plus a target program name
 
@@ -100,30 +105,84 @@ Prompts that should route to Linear pull mode:
 
 If the user names a Linear project (URL, team-key prefix like `JAS-`, or
 explicit "linear" keyword) AND a target program (e.g. `--as TPM90`),
-route to Linear pull mode. If the target program isn't obvious from the
+route to Linear sync mode. If the target program isn't obvious from the
 prompt, ask once before guessing — never invent a tab name.
 
 If both a workbook program and a Linear project plausibly match the
 user's words, ask once to disambiguate. Never guess.
 
-### MCP call sequence
+**Direction hints**: "sync" → `--direction=both` (default). "pull /
+refresh from Linear" → `--direction=pull`. "push my changes to
+Linear" → `--direction=push`. "what's different" → `--dry-run` (no apply).
+
+### MCP read-side call sequence
 
 Use the `claude_ai_Linear` MCP (must be installed + authenticated in
-Claude Code; if it isn't, tell the user and stop). Call sequence:
+Claude Code; if it isn't, tell the user and stop). For sync, every
+invocation starts with the same read sequence as Phase-1 pull:
 
 1. `mcp__claude_ai_Linear__list_teams()` — cache for the session
 2. `mcp__claude_ai_Linear__list_projects(team=<team>, query=<name-or-slug>)` — resolve project ID
 3. `mcp__claude_ai_Linear__get_project(query=<id>, includeMilestones=true)` — full description + milestones
 4. `mcp__claude_ai_Linear__list_issues(project=<id>)` — all issues (paginate via `cursor` if `hasNextPage` is true; up to 250 per page)
-5. **For every issue:** `mcp__claude_ai_Linear__get_issue(id=<issue>, includeRelations=true)` — needed because `list_issues` does NOT include `blockedBy` / `relations`. This is the dominant per-pull cost: roughly N MCP calls for an N-issue project.
-6. `mcp__claude_ai_Linear__list_milestones(project=<id>)` — prefer this over `get_project(includeMilestones)` because the shape is cleaner (numeric `progress` 0..1 instead of percent string)
-7. `mcp__claude_ai_Linear__list_issue_statuses(team=<team>)` — cache for the session; needed for state-name → workbook-Status mapping when teams have custom states
+5. **For every issue:** `mcp__claude_ai_Linear__get_issue(id=<issue>, includeRelations=true)` — needed because `list_issues` does NOT include `blockedBy` / `relations`. This is the dominant per-sync read cost: roughly N calls for an N-issue project.
+6. `mcp__claude_ai_Linear__list_milestones(project=<id>)` — prefer this over `get_project(includeMilestones)` (cleaner numeric `progress` 0..1).
+7. `mcp__claude_ai_Linear__list_issue_statuses(team=<team>)` — **required for Phase-2 archive**; also needed for custom-state name mapping. Cache for the session.
 
 Cost note: surface to the user before step 5 fires if the project has
-more than ~20 issues. Example: *"This project has 47 issues — fetching
-blocker data will take ~47 MCP calls. Proceed? (Y/n)"*
+more than ~20 issues. *"This project has 47 issues — fetching blocker
+data will take ~47 MCP read calls. Proceed? (Y/n)"*
 
-### Normalization recipe (MCP responses → `linear-pull --stdin` JSON)
+### MCP write-side execution loop (Phase-2 push path)
+
+The CLI returns a JSON list of `mcp_requests`. Each request describes
+one `save_issue` call the agent must dispatch. Walk the list in two
+passes:
+
+**Pass 1 — independent writes (parallel dispatch in one Claude turn).**
+All `pass_number=1` requests can fire simultaneously via parallel
+tool calls. Includes:
+- field updates on existing issues (`id=JAS-X` with the changed fields)
+- creates (no `id`, with `team`/`project`/`title`/...) — capture each
+  response's `id` and `url` immediately
+- archives (`id=JAS-X` with `state=<canceled-type state name>`)
+
+**Pass 2 — blockedBy reconciliation (depends on pass-1).** All
+`pass_number=2` requests reference `pass_1_placeholders` like
+`__NEW_<wbs>__`. Substitute each placeholder with the matching
+pass-1 response's `id` before dispatching this pass.
+
+**Pass-1 cost guidance**: dispatch up to ~10-20 calls per turn. For
+larger batches, split across multiple turns. Total Claude-turn count
+is roughly `ceil(N / 15)` for an N-changed-issue sync — not
+`N` turns.
+
+**Post-call snapshot refresh (optimistic)**: the CLI already wrote
+the expected post-sync state to `_LinearSync` before returning the
+MCP TODO list. The agent doesn't need a follow-up CLI call for
+updates / archives — just dispatch the writes. If any write fails or
+silently no-ops (see warning below), the next sync's 3-way merge
+will detect the drift and re-resolve.
+
+**Create-result handoff**: for `create` rows specifically, the CLI
+COULD NOT write the `_LinearSync` row at sync time (didn't know the
+new linear_id yet). After pass-1 returns, hand the
+`{wbs_id → new_linear_id, new_url}` map back to a follow-up CLI call
+(`gantt linear-sync --apply-create-results` — future feature; for v1
+the user can re-sync to pick up the new state via the normal diff).
+
+**SILENT-NO-OP WARNING**: `save_issue` accepts an invalid `state` name
+silently — it returns 200-OK with the issue unchanged (same `updatedAt`
+as `createdAt`, no error). After each write, compare the response's
+`updatedAt` to its `createdAt` (or to the issue's pre-call `updatedAt`).
+If they're equal, log a warning: *"save_issue for JAS-X didn't take
+effect — likely an invalid field value. Check the state/assignee name
+against `list_issue_statuses`/`list_users`."* The probe found this
+when "Cancelled" (British) silently failed; "Canceled" (American)
+worked. **Always populate `linear_archive_state` from
+`list_issue_statuses` — never hard-code.**
+
+### Normalization recipe (MCP responses → `linear-sync --stdin` JSON)
 
 Build the JSON payload that the CLI expects. Field-by-field:
 
@@ -134,19 +193,22 @@ Build the JSON payload that the CLI expects. Field-by-field:
 | `project.source_ref` | `get_project.url` | Deep link for traceability |
 | `config.default_duration_days` | `1` | Or whatever the user prefers; surface in dry-run |
 | `config.today` | today's ISO date | Used to anchor issues with no blockers + no startedAt |
-| `config.estimate_to_days.ratio` | `1.0` for points→days | Detect unit from issue `estimate.name` (see below) |
+| `config.estimate_to_days.ratio` | `1.0` for points→days | Detect unit from issue `estimate.name` |
+| `config.linear_team` | the team name from `list_teams` (e.g. `"JasonGarcia"`) | **Required for Phase-2 create**. Empty string in Phase-1 pull-only mode |
+| `config.linear_project` | the project name from `list_projects` | **Required for Phase-2 create** |
+| `config.linear_archive_state` | first state of `type=="canceled"` from `list_issue_statuses` (e.g. `"Canceled"`) | **Required for Phase-2 archive**. If empty, archive requests are silently skipped |
 | `issues[].linear_id` | `issue.id` (e.g. `JAS-5`) | The Linear identifier, not the UUID |
 | `issues[].title` | `issue.title` | |
-| `issues[].state` | mapped from `issue.statusType` | See state mapping table below — map by **type**, not name |
-| `issues[].estimate_days` | `issue.estimate.value × estimate_to_days.ratio` | If `estimate` is absent, leave `null` — adapter will warn + use default |
-| `issues[].percent` | always `0` for now | Linear doesn't carry %complete |
+| `issues[].state` | mapped from `issue.statusType` | See state mapping table — map by **type**, not name |
+| `issues[].estimate_days` | `issue.estimate.value × estimate_to_days.ratio` | If `estimate` is absent, leave `null` — adapter warns + uses default |
+| `issues[].percent` | always `0` (Linear doesn't carry %complete) | |
 | `issues[].assignee` | `issue.assignee.email` if present else `""` | Email preferred over display name |
-| `issues[].start_anchor` | `issue.startedAt` or `null` | For issues with no blockers |
+| `issues[].start_anchor` | `issue.startedAt` or `null` | |
 | `issues[].end_anchor` | `issue.dueDate` or `null` | |
 | `issues[].is_milestone` | `false` for regular issues; `true` for synthesized milestone tasks | See milestone synthesis below |
 | `issues[].parent_linear_id` | `issue.parentId` or `null` | Stable identifier; CLI uses for WBS hierarchy |
 | `issues[].linear_url` | `issue.url` | Used by CLI for HYPERLINK formula on the name cell |
-| `edges[]` | from `get_issue(includeRelations=true).relations.blockedBy` per issue | Each `blockedBy` item → one edge: `{from_linear_id, to_linear_id, type: "FS", lag_days: 0}` |
+| `edges[]` | from `get_issue.relations.blockedBy` per issue | Each `blockedBy` item → `{from_linear_id, to_linear_id, type: "FS", lag_days: 0}` |
 
 **State mapping** (always by `statusType`, not `status` name):
 
@@ -158,8 +220,7 @@ Build the JSON payload that the CLI expects. Field-by-field:
 | `completed` | `Done` |
 | `canceled` | `Cancelled` |
 
-**Estimate unit detection** — read the first non-null `estimate.name`
-across the project's issues:
+**Estimate unit detection** — read the first non-null `estimate.name`:
 
 | `estimate.name` example | Inferred unit | Default ratio (→ days) |
 |---|---|---|
@@ -168,90 +229,112 @@ across the project's issues:
 | `"L"`, `"M"`, etc. | t-shirt | manual user input — ask |
 | (no estimates) | none | 1.0 (use default_duration_days for all) |
 
-Surface the detected unit and the conversion in the dry-run preview so
-the user can confirm before applying.
-
 **Milestone synthesis** — for each entry in `list_milestones`, append a
-synthetic issue to the payload with:
-- `linear_id`: the milestone's UUID prefixed with `MS-` (e.g. `MS-0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d`) so it doesn't collide with real issue keys
-- `title`: the milestone name
+synthetic issue to the payload:
+- `linear_id`: milestone UUID prefixed `MS-` (won't collide with real issue keys)
+- `title`: milestone name
 - `is_milestone`: `true`
 - `estimate_days`: `0`
-- `linear_url`: the project URL with `?milestone=<id>` query, if Linear provides one (else just the project URL)
-- No edges; the agent can optionally add an edge from the last
-  non-milestone issue to the milestone if it makes sense (skip if
-  unsure — milestones can be free-floating).
+- `linear_url`: the project URL (Linear doesn't deep-link to milestones)
 
-**Pagination** — if `list_issues.hasNextPage` is true, follow `cursor`
-and merge pages before invoking the CLI.
+**Pagination** — if `list_issues.hasNextPage`, follow `cursor` and
+merge pages before invoking the CLI.
 
-### Dry-run-first convention (always)
+### Dry-run-first + two-stage confirmation
 
-The agent ALWAYS runs `linear-pull` with `--dry-run` first, then asks
-the user to confirm before applying. Pull is a real workbook write —
-matching the skill's existing "confirm-before-side-effect" pattern.
+Sync is a real workbook + Linear write. Always preview before applying:
 
-Flow:
-
-1. Fetch + normalize → JSON payload
-2. Run `<skill-base-dir>/scripts/gantt linear-pull --stdin --as <program> --dry-run`,
-   piping the JSON payload via stdin
-3. Parse the stdout JSON summary; render the diff to the user as a
-   markdown table (see Rendering below)
-4. Ask: *"Apply this? (y/n)"*
-5. On `y`: re-run the same command without `--dry-run`; surface the
-   result line at the top of the response per the skill's convention.
-6. On `n`: stop; don't write.
+1. **Fetch + normalize → JSON payload.**
+2. **Run `linear-sync --dry-run`**, pipe payload via stdin.
+3. **Parse the JSON summary; render the diff to the user** as a
+   markdown table (see Rendering below).
+4. **Confirmation gate logic** (this is where the two-stage matters):
+   - If the diff has **only** `update` / `unchanged` / `pull_new` /
+     `orphaned_link` rows (no creates, no archives): **apply
+     automatically** without an extra prompt. Per the established
+     no-redundant-apply-gate pattern, the dry-run preview IS the
+     consent — re-prompting on every clean sync is friction.
+   - If the diff has any `create` or `archive` rows: **ask explicitly
+     before applying**. *"This sync will create N new Linear issues
+     and archive M existing ones. Apply? (y/n)"* Creates and
+     archives are higher-stakes — wrong create makes noise in Linear
+     that's hard to clean up; wrong archive destroys team context.
+5. **On apply**: re-run without `--dry-run`. The CLI applies pull-side
+   workbook writes + emits the MCP TODO list for the agent to dispatch.
+6. **Dispatch MCP TODO list** per the write-side execution loop above.
+7. **Surface the result line** at the top of the response per the
+   skill's convention.
 
 ### CLI invocation
 
-Construct the absolute path:
+Primary verb (Phase 2):
 ```
-<skill-base-dir>/scripts/gantt linear-pull --stdin --as <program> [--dry-run] [--force]
+<skill-base-dir>/scripts/gantt linear-sync --stdin --as <program> [--dry-run] [--direction={pull,push,both}] [--force]
 ```
 
-Capture stdout (JSON) separately from stderr (result line) — the
-result line goes at the top of your response verbatim per the
-skill's convention.
+Aliases:
+- `gantt linear-push --stdin --as <program>` — same as `linear-sync --direction=push`
+- `gantt linear-pull --stdin --as <program>` — Phase-1-compat path; calls the legacy pull orchestrator (still works, simpler JSON shape without `mcp_requests`)
 
-If the program tab doesn't exist yet (CLI returns
-`program_tab_missing` error), tell the user and ask whether to create
-it first via `<skill-base-dir>/scripts/gantt program new <program>`,
-then retry the pull.
+Capture stdout (JSON) separately from stderr (result line). Result line
+goes at the top of your response verbatim.
+
+If the program tab doesn't exist (CLI returns `program_tab_missing`),
+tell the user and ask whether to run `gantt program new <program>`
+first, then retry the sync.
 
 ### Rendering
 
 After the dry-run summary, present the diff as a markdown table:
 
-| Action | WBS | Linear ID | Title | Changed fields |
-|---|---|---|---|---|
-| added | 1 | JAS-5 | Spec optics | — |
-| updated | 2 | JAS-6 | Eyepiece fab | state: Backlog→In Progress (linear) |
-| unchanged | 3 | JAS-7 | Doc revision | — |
-| workbook_only_preserved | 4 | — | Manual checkpoint | — |
+| Action | WBS | Linear ID | Title | Direction | Changed fields |
+|---|---|---|---|---|---|
+| update | 1 | JAS-5 | Spec optics | push | title: "Old" → "New" (workbook wins) |
+| update | 2 | JAS-6 | Eyepiece fab | pull | state: Backlog → In Progress (linear) |
+| create | 3 | — | Manual task | push | new Linear issue |
+| pull_new | — | JAS-99 | Brand new from Linear | pull | new workbook row |
+| archive | 4 | JAS-9 | Launch | push | state → Canceled |
+| orphaned_link | 5 | JAS-GHOST | (gone from Linear) | — | workbook row preserved |
+| unchanged | 6 | JAS-8 | Eyepiece QA | — | — |
 
 Below the table:
 
-- One-line summary: *"N added, M updated, K unchanged"*
-- Any warnings as a bulleted sub-list (e.g. *"JAS-7: no estimate; using
-  default 1d"*)
-- Snapshot disclaimer: *"Snapshot fetched at HH:MM:SS — Linear may have
-  changed since."*
-- The "Apply this? (y/n)" prompt
+- **Summary**: *"N pushed, M pulled, K created, J archived, C conflicts
+  resolved, U unchanged."*
+- **Conflicts** (if any): dedicated sub-section listing each true
+  conflict with the resolved winner and an offer to override:
+  > ⚠ JAS-5 title: workbook "Spec optics (workbook rename)" vs Linear
+  > "Spec optics (linear rename)". Default policy: Linear wins. Reply
+  > "override JAS-5 title workbook" to flip.
+- **Warnings** as a bulleted sub-list (missing-estimate, unmapped
+  state, etc.).
+- **Snapshot disclaimer**: *"Snapshot fetched at HH:MM:SS — Linear
+  may have changed since."*
+- **MCP cost preview** (push/both directions): *"This sync will
+  dispatch K MCP write calls across ~⌈K/15⌉ agent turns."*
+- **Confirmation prompt** per the two-stage rule above.
 
-After apply, the agent's response opens with the verified result line
-(`gantt: linear-pull <program> — N added, M updated, K unchanged ✓`)
-per the existing skill convention.
+After apply, response opens with the verified result line:
+`gantt: linear-sync <program> — N pushed, M pulled, K created, J archived, C conflicts resolved, U unchanged ✓`
 
 ### Error handling
 
 | CLI error / exit code | How to render |
 |---|---|
-| `contract_validation` (exit 1) | "I built a malformed payload — bug in normalization. Try again or report: \<error detail>." Don't retry — the bug is in the agent, not the user's input. |
+| `contract_validation` (exit 1) | "I built a malformed payload — bug in normalization. Detail: \<error\>." Don't retry; surface to user. |
+| `invalid_argument` (exit 1) | E.g. unknown `--direction`. Show the error and retry with corrected args. |
 | `program_tab_missing` (exit 2) | "Program tab `P_<program>` doesn't exist. Run `gantt program new <program>` first? (y/n)" |
-| `cycle_detected` (exit 2) | Surface the trace as Linear-issue links so user can fix the cycle in Linear. Re-pull after fix. |
-| `unanchored_task` (exit 2) | An existing workbook row has no predecessors and no manual start. Tell the user to run `gantt recalc <program>` to surface the offending row. |
-| `internal` (exit 3) | Show the error verbatim; tell user to retry. |
+| `internal` (exit 3) | Show error verbatim; tell user to retry. |
+
+**MCP-side errors** (after CLI returns):
+- `save_issue` no-op (response `updatedAt == createdAt`): log warning,
+  surface as a per-issue note in the result. Likely a state/assignee
+  name mismatch — re-fetch `list_issue_statuses` / `list_users` and
+  retry that one issue.
+- `save_issue` rate-limit: back off ~5s, retry the same parallel batch.
+- `save_issue` validation error (e.g. invalid `team` on create): stop
+  the sync, surface the error, do NOT retry — user needs to fix the
+  payload.
 
 ## First-run handling
 
@@ -270,7 +353,7 @@ Every `gantt` command prints a verified line that starts with `gantt:` and ends 
 ## Things this skill does NOT do
 
 - **Fuzzy task lookup by name** — always ask the user for the WBS id when ambiguous.
-- **Linear push / sync** — Phase 1 supports Linear → workbook pull only. Writes back to Linear (push) and bidirectional sync are Phase 2+.
+- **Linear** — `gantt linear-sync` (full bidirectional: pull + push + create + archive) and `gantt linear-pull` (read-only pull, Phase-1-compat) are both supported via the Linear MCP. See the Linear MCP sync mode section above.
 - **Jira / Asana / Trello sync** — out of scope.
 - **Multi-PM concurrent edit reconciliation** — single-writer model. If another PM edits the sheet, re-run `recalc` to re-cascade.
 - **Sub-day granularity, per-team calendars, multiple critical paths** — single critical path only; days only.
