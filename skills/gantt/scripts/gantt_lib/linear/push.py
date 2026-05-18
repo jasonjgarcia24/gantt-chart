@@ -32,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from gantt_lib.cp.contracts import CpInputIssue
 from gantt_lib.linear.merge import (
     FieldChange,
     FieldClassification,
@@ -39,6 +40,7 @@ from gantt_lib.linear.merge import (
     SyncDiff,
     SyncRowDiff,
 )
+from gantt_lib.model import Task
 
 
 # Full MCP tool path so the agent's dispatcher can route directly.
@@ -300,10 +302,74 @@ def _build_blockedby_request(
 # ----- Top-level entry point -------------------------------------------------
 
 
+def _augment_with_due_date_pushes(
+    requests: list[MCPRequest],
+    diff: SyncDiff,
+    workbook_tasks_by_wbs: dict[str, Task],
+    linear_issues_by_id: dict[str, CpInputIssue],
+) -> list[MCPRequest]:
+    """Workbook task.end (cascade-computed) pushes to Linear dueDate
+    on every linked row whose workbook value differs from Linear's.
+
+    This is intentionally separate from the 3-way merge (`due_date` is
+    NOT in MERGEABLE_FIELDS): workbook end is a cascade projection
+    that recomputes every recalc, while Linear dueDate is the user's
+    commitment target. Adding it to the symmetric merge caused empty
+    Linear dueDates to wipe workbook ends on pull. The right semantics
+    is asymmetric:
+
+      Workbook end → Linear dueDate: ALWAYS push (when they differ)
+      Linear dueDate → workbook end: NEVER pull (cascade owns workbook end)
+
+    Skips:
+      - rows where workbook.end is empty (don't clear Linear dueDate)
+      - rows where workbook.end == Linear dueDate (no-op)
+      - create / archive rows (handled by their own paths)
+      - orphaned_link / pull_new (no Linear-side target or no workbook end yet)
+
+    Augments existing pass-1 request kwargs in place (cheap), or appends
+    a new pass-1 request when no other field updates exist for that row.
+    """
+    for row in diff.rows:
+        if row.action not in ("update", "unchanged"):
+            continue
+        task = workbook_tasks_by_wbs.get(row.wbs_id)
+        issue = linear_issues_by_id.get(row.linear_id)
+        if task is None or issue is None:
+            continue
+        wb_end = task.end.isoformat() if task.end else ""
+        linear_due = issue.end_anchor.isoformat() if issue.end_anchor else ""
+        if not wb_end or wb_end == linear_due:
+            continue
+
+        # If a pass-1 save_issue already exists for this issue, augment its kwargs.
+        existing = next(
+            (
+                r for r in requests
+                if r.pass_number == 1 and r.kwargs.get("id") == row.linear_id
+            ),
+            None,
+        )
+        if existing is not None:
+            existing.kwargs["dueDate"] = wb_end
+        else:
+            requests.append(MCPRequest(
+                tool=SAVE_ISSUE_TOOL,
+                kwargs={"id": row.linear_id, "dueDate": wb_end},
+                description=(
+                    f"push workbook end → Linear dueDate on {row.linear_id} "
+                    f"({wb_end})"
+                ),
+                pass_number=1,
+            ))
+    return requests
+
+
 def build_push_requests(
     diff: SyncDiff,
     *,
     workbook_tasks_by_wbs: dict[str, Any],  # gantt_lib.model.Task by wbs_id
+    linear_issues_by_id: Optional[dict[str, CpInputIssue]] = None,
     linear_team: str,
     linear_project: str,
     linear_archive_state: str,
@@ -412,4 +478,17 @@ def build_push_requests(
             pass_1_placeholders=tuple([_placeholder_for(row.wbs_id), *placeholders]),
         ))
 
-    return pass1 + pass2
+    requests = pass1 + pass2
+
+    # Augment pass-1 with due_date pushes for any linked row where
+    # workbook end differs from Linear dueDate. Asymmetric on purpose —
+    # see _augment_with_due_date_pushes docstring.
+    if linear_issues_by_id is not None:
+        _augment_with_due_date_pushes(
+            requests,
+            diff,
+            workbook_tasks_by_wbs,
+            linear_issues_by_id,
+        )
+
+    return requests

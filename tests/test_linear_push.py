@@ -15,6 +15,7 @@ from datetime import date
 
 import pytest
 
+from gantt_lib.cp.contracts import CpInputIssue
 from gantt_lib.linear.merge import (
     FieldChange,
     FieldClassification,
@@ -150,12 +151,13 @@ def test_update_estimate_zero_skipped():
     assert reqs == []  # nothing to push (estimate was the only changed field)
 
 
-def test_update_due_date_push_is_skipped_in_phase2_v1():
-    """due_date is workbook-only in Phase 2 v1 — workbook task.end is
-    a cascade output, not user intent. Pushing it to Linear's dueDate
-    (which IS user intent) causes recompute-loops and semantic
-    mismatch. See `_push_field_kwargs` doc comment for the design
-    note + Phase-2.1 follow-up plan."""
+def test_due_date_field_in_merge_diff_does_not_emit_directly():
+    """due_date is NOT in MERGEABLE_FIELDS — the merge engine never
+    classifies it. If a test forces a synthetic due_date field_change
+    through, _push_field_kwargs still skips it (the field isn't in
+    field_to_mcp). The actual due_date push is handled separately by
+    _augment_with_due_date_pushes from the workbook task + Linear
+    issue context (see test_due_date_augmentation_* tests below)."""
     row = _mk_update_row(field_changes=[
         _fc("due_date", "2026-06-01", "", "",
             FieldClassification.PUSH, "2026-06-01", "workbook"),
@@ -334,3 +336,125 @@ def test_pass_1_requests_come_before_pass_2_in_output():
     assert len(reqs) == 2
     assert reqs[0].pass_number == 1  # field updates
     assert reqs[1].pass_number == 2  # blockedBy
+
+
+# --- due_date asymmetric push (workbook end → Linear dueDate) ---------------
+
+
+def _build_with_due(rows, *, tasks_by_wbs, issues_by_id):
+    diff = SyncDiff(program="TEST", rows=rows)
+    return build_push_requests(
+        diff,
+        workbook_tasks_by_wbs=tasks_by_wbs,
+        linear_issues_by_id=issues_by_id,
+        linear_team="JasonGarcia",
+        linear_project="Test",
+        linear_archive_state="Cancelled",
+    )
+
+
+def _iss(linear_id, end_anchor=None):
+    return CpInputIssue(linear_id=linear_id, title="x", end_anchor=end_anchor)
+
+
+def test_due_date_augmentation_pushes_workbook_end_when_linear_is_blank():
+    """Workbook end set; Linear dueDate null → push wb end to Linear."""
+    row = SyncRowDiff(
+        wbs_id="1", linear_id="JAS-5", title="x", action="unchanged",
+    )
+    task = Task(id="1", level=1, name="x", duration=2, end=date(2026, 5, 25))
+    reqs = _build_with_due(
+        [row],
+        tasks_by_wbs={"1": task},
+        issues_by_id={"JAS-5": _iss("JAS-5", end_anchor=None)},
+    )
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "JAS-5", "dueDate": "2026-05-25"}
+    assert reqs[0].pass_number == 1
+
+
+def test_due_date_augmentation_skipped_when_workbook_end_empty():
+    """Empty workbook end must NOT push (would clear Linear's user-set dueDate)."""
+    row = SyncRowDiff(
+        wbs_id="1", linear_id="JAS-5", title="x", action="unchanged",
+    )
+    task = Task(id="1", level=1, name="x", duration=2, end=None)
+    reqs = _build_with_due(
+        [row],
+        tasks_by_wbs={"1": task},
+        issues_by_id={"JAS-5": _iss("JAS-5", end_anchor=date(2026, 5, 30))},
+    )
+    assert reqs == []
+
+
+def test_due_date_augmentation_skipped_when_values_match():
+    """No-op: workbook end already equals Linear dueDate."""
+    row = SyncRowDiff(
+        wbs_id="1", linear_id="JAS-5", title="x", action="unchanged",
+    )
+    task = Task(id="1", level=1, name="x", duration=2, end=date(2026, 5, 25))
+    reqs = _build_with_due(
+        [row],
+        tasks_by_wbs={"1": task},
+        issues_by_id={"JAS-5": _iss("JAS-5", end_anchor=date(2026, 5, 25))},
+    )
+    assert reqs == []
+
+
+def test_due_date_augmentation_merges_into_existing_request():
+    """A field update on the same row already produces a save_issue;
+    due_date adds to that request's kwargs (one MCP call per issue,
+    not two)."""
+    row = _mk_update_row(field_changes=[
+        _fc("title", "New", "Old", "Old", FieldClassification.PUSH, "New", "workbook"),
+    ])
+    task = Task(id="1", level=1, name="New", duration=2, end=date(2026, 5, 25))
+    reqs = _build_with_due(
+        [row],
+        tasks_by_wbs={"1": task},
+        issues_by_id={"JAS-5": _iss("JAS-5", end_anchor=None)},
+    )
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "JAS-5", "title": "New", "dueDate": "2026-05-25"}
+
+
+def test_due_date_augmentation_skipped_for_archive_rows():
+    """archive rows don't get due_date augmentation — we just want to
+    flip the state to Cancelled, not update commitments on a dead issue.
+    (Create rows DO carry dueDate, but that comes from the create's own
+    kwargs in `_build_create_request`, not from this augmentation step.)"""
+    archive_row = SyncRowDiff(
+        wbs_id="5", linear_id="JAS-OLD", title="dead", action="archive",
+    )
+    # Even though we provide an issue + task with diverging ends, the
+    # archive row's MCP request must stay state-only.
+    archive_task = Task(id="5", level=1, name="dead", duration=3, end=date(2026, 6, 1))
+    reqs = _build_with_due(
+        [archive_row],
+        tasks_by_wbs={"5": archive_task},
+        issues_by_id={"JAS-OLD": _iss("JAS-OLD", end_anchor=None)},
+    )
+    assert len(reqs) == 1
+    archive_req = reqs[0]
+    assert archive_req.kwargs == {"id": "JAS-OLD", "state": "Cancelled"}
+    assert "dueDate" not in archive_req.kwargs
+
+
+def test_due_date_omitted_when_linear_issues_by_id_not_supplied():
+    """Backwards compat: callers that don't pass linear_issues_by_id
+    get the legacy behavior (no due_date augmentation). Sync.py
+    always supplies it for push/both directions."""
+    row = SyncRowDiff(
+        wbs_id="1", linear_id="JAS-5", title="x", action="unchanged",
+    )
+    diff = SyncDiff(program="TEST", rows=[row])
+    task = Task(id="1", level=1, name="x", duration=2, end=date(2026, 5, 25))
+    reqs = build_push_requests(
+        diff,
+        workbook_tasks_by_wbs={"1": task},
+        # linear_issues_by_id omitted on purpose
+        linear_team="JasonGarcia",
+        linear_project="Test",
+        linear_archive_state="Cancelled",
+    )
+    assert reqs == []
