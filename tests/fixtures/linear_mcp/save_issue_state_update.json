@@ -1,0 +1,19 @@
+{
+  "_meta": "Captured from mcp__claude_ai_Linear__save_issue(id='JAS-7', state='In Progress') on 2026-05-17. KEY FINDINGS: (1) save_issue returns the FULL issue object (every field that get_issue returns minus `relations`), not a partial diff. (2) `relations` is NOT included in the save_issue response — agent must call get_issue separately if it needs the updated blockedBy graph. (3) `startedAt` is auto-populated when transitioning to a started-type state. (4) `updatedAt` is fresh.",
+  "id": "JAS-7",
+  "title": "Doc revision",
+  "description": "Blocked by Spec optics. No estimate — tests the missing-estimate fallback path (cp adapter should warn and use default_duration_days).",
+  "priority": {"value": 0, "name": "No priority"},
+  "url": "https://linear.app/jasongarcia/issue/JAS-7/doc-revision",
+  "createdAt": "2026-05-18T02:26:47.958Z",
+  "updatedAt": "2026-05-18T04:26:07.604Z",
+  "completedAt": null,
+  "startedAt": "2026-05-18T04:26:07.581Z",
+  "canceledAt": null,
+  "dueDate": null,
+  "status": "In Progress",
+  "statusType": "started",
+  "labels": [],
+  "project": "Gantt Skill — Linear Integration Test",
+  "team": "JasonGarcia"
+}

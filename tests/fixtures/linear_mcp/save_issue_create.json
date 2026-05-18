@@ -1,0 +1,15 @@
+{
+  "_meta": "Captured from save_issue (no id, team='JasonGarcia', project=..., title=..., estimate=3, description=...) on 2026-05-17. KEY FINDINGS: (1) create returns the full new issue including the auto-assigned `id` ('JAS-10') and `url`. (2) Default state on create is 'Backlog' (statusType='backlog') — agent can override via state= but Linear seems to pick the team's default if not specified. (3) `createdAt` and `updatedAt` are identical at create-time. (4) `gitBranchName` is auto-generated from issue id + slugified title. Agent extracts the `id` and `url` from the response to write back to _LinearSync (post-create snapshot refresh).",
+  "id": "JAS-10",
+  "title": "Phase-2 probe test (safe to delete)",
+  "estimate": {"value": 3, "name": "3 Points"},
+  "url": "https://linear.app/jasongarcia/issue/JAS-10/phase-2-probe-test-safe-to-delete",
+  "gitBranchName": "jasongarcia24/jas-10-phase-2-probe-test-safe-to-delete",
+  "createdAt": "2026-05-18T04:27:52.722Z",
+  "updatedAt": "2026-05-18T04:27:52.722Z",
+  "status": "Backlog",
+  "statusType": "backlog",
+  "labels": [],
+  "project": "Gantt Skill — Linear Integration Test",
+  "team": "JasonGarcia"
+}

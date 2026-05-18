@@ -1,0 +1,15 @@
+{
+  "_meta": "Captured from save_issue(id='JAS-10', state='Canceled') on 2026-05-17. KEY FINDINGS: (1) Archive is `state=<canceled-type state name>` — there's NO dedicated archive mutation in MCP. (2) State name matching is EXACT — first attempt with 'Cancelled' (British, two L) was a silent no-op (response showed unchanged status='Backlog' and same updatedAt as createdAt). Second attempt with 'Canceled' (American, one L) worked. The agent MUST resolve the canceled-type state name from `list_issue_statuses` rather than hard-coding. (3) On successful archive: status='Canceled', statusType='canceled', `canceledAt` is populated. `archivedAt` stays null — Linear distinguishes 'canceled' (workflow state) from 'archived' (admin lifecycle). (4) The team's first canceled-type state is what the agent should use; if the team has multiple (e.g., 'Canceled' AND 'Duplicate' both of type='canceled'), pick the first or let user configure via `~/.config/gantt/config.json`.",
+  "id": "JAS-10",
+  "title": "Phase-2 probe test (safe to delete)",
+  "url": "https://linear.app/jasongarcia/issue/JAS-10/phase-2-probe-test-safe-to-delete",
+  "createdAt": "2026-05-18T04:27:52.722Z",
+  "updatedAt": "2026-05-18T04:28:30.414Z",
+  "canceledAt": "2026-05-18T04:28:30.396Z",
+  "archivedAt": null,
+  "status": "Canceled",
+  "statusType": "canceled",
+  "labels": [],
+  "project": "Gantt Skill — Linear Integration Test",
+  "team": "JasonGarcia"
+}

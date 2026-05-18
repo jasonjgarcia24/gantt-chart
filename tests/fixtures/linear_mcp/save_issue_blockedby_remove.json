@@ -1,0 +1,12 @@
+{
+  "_meta": "Captured from save_issue(id='JAS-9', removeBlockedBy=['JAS-5']) on 2026-05-17. JAS-9 had blockedBy=[JAS-5, JAS-6, JAS-7]; after this call blockedBy=[JAS-6, JAS-7] (JAS-5 successfully removed). KEY: removeBlockedBy works as expected — only the listed IDs are removed; other blockers stay. Push pass-2 should compute the to-remove delta and pass it via removeBlockedBy; adds and removes can be combined in a single save_issue call.",
+  "save_issue_response": {
+    "id": "JAS-9",
+    "updatedAt": "2026-05-18T04:27:18.879Z",
+    "_note": "save_issue still returns no relations field; agent must follow up with get_issue"
+  },
+  "followup_get_issue_blockedby": [
+    {"id": "JAS-6", "title": "Eyepiece fab"},
+    {"id": "JAS-7", "title": "Doc revision"}
+  ]
+}

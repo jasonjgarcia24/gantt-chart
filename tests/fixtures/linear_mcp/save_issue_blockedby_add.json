@@ -1,0 +1,17 @@
+{
+  "_meta": "Captured from save_issue(id='JAS-9', blockedBy=['JAS-5']) on 2026-05-17. JAS-9 already had blockedBy=[JAS-6, JAS-7]; after this call get_issue confirms blockedBy=[JAS-5, JAS-6, JAS-7]. KEY: blockedBy is APPEND-ONLY (per MCP schema doc) — passing a list does NOT replace the existing relations, it adds to them. Push pass-2 should compute the delta (target - existing) and pass only the additions. The save_issue response itself does NOT include relations; agent must follow up with get_issue(includeRelations=true) if it needs to confirm the post-call state.",
+  "save_issue_response": {
+    "id": "JAS-9",
+    "title": "Launch",
+    "url": "https://linear.app/jasongarcia/issue/JAS-9/launch",
+    "updatedAt": "2026-05-18T04:26:44.258Z",
+    "status": "Backlog",
+    "statusType": "backlog",
+    "_note": "no `relations` field on save_issue response"
+  },
+  "followup_get_issue_blockedby": [
+    {"id": "JAS-5", "title": "Spec optics"},
+    {"id": "JAS-6", "title": "Eyepiece fab"},
+    {"id": "JAS-7", "title": "Doc revision"}
+  ]
+}
