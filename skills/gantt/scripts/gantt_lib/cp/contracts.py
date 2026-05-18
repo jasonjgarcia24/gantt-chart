@@ -44,6 +44,12 @@ class CpInputConfig:
     default_duration_days: int
     today: date
     estimate_to_days: dict = field(default_factory=dict)
+    # Phase-2 sync fields. Populated by the agent from list_teams /
+    # list_projects / list_issue_statuses. Defaults are blank so
+    # Phase-1-only callers (pull-only) don't need to set them.
+    linear_team: str = ""        # team name or id — required for create
+    linear_project: str = ""     # project name or id — required for create
+    linear_archive_state: str = ""  # state name to apply on archive (first canceled-type)
 
 
 @dataclass
@@ -165,6 +171,9 @@ def from_json(s: str) -> CpInput:
         ),
         today=_opt_date(_require(config_raw, "today", "$.config")),
         estimate_to_days=config_raw.get("estimate_to_days") or {},
+        linear_team=config_raw.get("linear_team", "") or "",
+        linear_project=config_raw.get("linear_project", "") or "",
+        linear_archive_state=config_raw.get("linear_archive_state", "") or "",
     )
 
     issues_raw = raw.get("issues", []) or []
