@@ -1,0 +1,12 @@
+{
+  "_meta": "Captured from mcp__claude_ai_Linear__list_milestones(project='Gantt Skill — Linear Integration Test') on 2026-05-17. Notes: progress is 0..1 (numeric, not percent string like in get_project); sortOrder controls Linear-UI ordering — agent should use this for stable milestone ordering across pulls.",
+  "milestones": [
+    {
+      "id": "0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d",
+      "name": "v1.0 launch",
+      "description": "Test milestone. The pull's normalization should synthesize a Task with `is_milestone=true` for this.",
+      "progress": 0,
+      "sortOrder": 69
+    }
+  ]
+}

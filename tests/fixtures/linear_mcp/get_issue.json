@@ -1,0 +1,33 @@
+{
+  "_meta": "Captured from mcp__claude_ai_Linear__get_issue(id='JAS-9', includeRelations=true) on 2026-05-17. JAS-9 was chosen as the probe issue because it has two blockers (fan-in shape). KEY FINDING: `relations.blockedBy` is `[{id, title}]` — just identifiers, no relation type or lag. This confirms Phase 1's mapping: every Linear blockedBy becomes a FS+0 predecessor in the workbook.",
+  "id": "JAS-9",
+  "title": "Launch",
+  "description": "Blocked by Eyepiece fab + Doc revision. Tests the fan-in path (two predecessors).",
+  "priority": {"value": 0, "name": "No priority"},
+  "estimate": {"value": 1, "name": "1 Point"},
+  "url": "https://linear.app/jasongarcia/issue/JAS-9/launch",
+  "createdAt": "2026-05-18T02:27:09.171Z",
+  "updatedAt": "2026-05-18T02:27:09.457Z",
+  "completedAt": null,
+  "startedAt": null,
+  "dueDate": null,
+  "status": "Backlog",
+  "statusType": "backlog",
+  "labels": [],
+  "attachments": [],
+  "documents": [],
+  "createdBy": "Jason Garcia",
+  "project": "Gantt Skill — Linear Integration Test",
+  "projectId": "d6f4008d-a360-4ca0-a6b1-48481501ad97",
+  "team": "JasonGarcia",
+  "teamId": "7828966b-eecd-43d0-9c9e-7d535368964e",
+  "relations": {
+    "blocks": [],
+    "blockedBy": [
+      {"id": "JAS-6", "title": "Eyepiece fab"},
+      {"id": "JAS-7", "title": "Doc revision"}
+    ],
+    "relatedTo": [],
+    "duplicateOf": null
+  }
+}

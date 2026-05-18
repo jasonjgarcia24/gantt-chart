@@ -1,0 +1,12 @@
+{
+  "_meta": "Captured from mcp__claude_ai_Linear__list_issue_statuses(team='JasonGarcia') on 2026-05-17. KEY FINDING: each status has a `type` (one of: backlog | unstarted | started | completed | canceled) — the agent should map by TYPE, not by name, so custom workflow state names ('In Review', 'Duplicate', etc.) still route to the right workbook Status. Default mapping: backlog/unstarted → Not Started; started → In Progress; completed → Done; canceled → Cancelled.",
+  "statuses": [
+    {"id": "1d511287-af30-41d1-a753-1c7cb0c85494", "type": "started",   "name": "In Review"},
+    {"id": "d8553b15-99ae-4c6b-b5b1-39969b52ba9f", "type": "completed", "name": "Done"},
+    {"id": "c6b4a85a-3665-4c47-b6ae-4af693feb1ce", "type": "canceled",  "name": "Duplicate"},
+    {"id": "9aa362a4-09cf-4d49-91f9-43955bc268aa", "type": "canceled",  "name": "Canceled"},
+    {"id": "7d715619-6913-4ec2-b599-478a98a17613", "type": "backlog",   "name": "Backlog"},
+    {"id": "6c740f36-81b9-4dc4-a4fd-f61545e3277e", "type": "started",   "name": "In Progress"},
+    {"id": "470592a1-f4b2-4e29-8970-347167c57ed8", "type": "unstarted", "name": "Todo"}
+  ]
+}

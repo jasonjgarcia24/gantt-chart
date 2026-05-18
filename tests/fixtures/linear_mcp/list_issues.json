@@ -1,0 +1,76 @@
+{
+  "_meta": "Captured from mcp__claude_ai_Linear__list_issues(project='Gantt Skill — Linear Integration Test') on 2026-05-17. KEY FINDING: includes parentId but NOT blockedBy/relations. Agent must follow up with get_issue(includeRelations=true) per issue to build the blocker graph. Issues come back in reverse-creation order (newest first).",
+  "issues": [
+    {
+      "id": "JAS-9",
+      "title": "Launch",
+      "description": "Blocked by Eyepiece fab + Doc revision. Tests the fan-in path (two predecessors).",
+      "priority": {"value": 0, "name": "No priority"},
+      "estimate": {"value": 1, "name": "1 Point"},
+      "url": "https://linear.app/jasongarcia/issue/JAS-9/launch",
+      "createdAt": "2026-05-18T02:27:09.171Z",
+      "updatedAt": "2026-05-18T02:27:09.457Z",
+      "completedAt": null,
+      "startedAt": null,
+      "dueDate": null,
+      "status": "Backlog",
+      "statusType": "backlog",
+      "labels": [],
+      "createdBy": "Jason Garcia",
+      "project": "Gantt Skill — Linear Integration Test",
+      "projectId": "d6f4008d-a360-4ca0-a6b1-48481501ad97",
+      "team": "JasonGarcia",
+      "teamId": "7828966b-eecd-43d0-9c9e-7d535368964e"
+    },
+    {
+      "id": "JAS-8",
+      "title": "Eyepiece QA",
+      "description": "Sub-issue of Eyepiece fab. Tests the parent/sub-issue → WBS hierarchy mapping.",
+      "estimate": {"value": 2, "name": "2 Points"},
+      "url": "https://linear.app/jasongarcia/issue/JAS-8/eyepiece-qa",
+      "status": "Backlog",
+      "statusType": "backlog",
+      "parentId": "JAS-6",
+      "project": "Gantt Skill — Linear Integration Test",
+      "projectId": "d6f4008d-a360-4ca0-a6b1-48481501ad97",
+      "team": "JasonGarcia"
+    },
+    {
+      "id": "JAS-7",
+      "title": "Doc revision",
+      "description": "Blocked by Spec optics. No estimate — tests the missing-estimate fallback path (cp adapter should warn and use default_duration_days).",
+      "url": "https://linear.app/jasongarcia/issue/JAS-7/doc-revision",
+      "status": "Backlog",
+      "statusType": "backlog",
+      "project": "Gantt Skill — Linear Integration Test",
+      "projectId": "d6f4008d-a360-4ca0-a6b1-48481501ad97",
+      "team": "JasonGarcia",
+      "_note_missing_field": "no `estimate` key when the issue has no estimate"
+    },
+    {
+      "id": "JAS-6",
+      "title": "Eyepiece fab",
+      "description": "Blocked by Spec optics. Tests the FS chain path.",
+      "estimate": {"value": 5, "name": "5 Points"},
+      "url": "https://linear.app/jasongarcia/issue/JAS-6/eyepiece-fab",
+      "status": "Backlog",
+      "statusType": "backlog",
+      "project": "Gantt Skill — Linear Integration Test",
+      "projectId": "d6f4008d-a360-4ca0-a6b1-48481501ad97",
+      "team": "JasonGarcia"
+    },
+    {
+      "id": "JAS-5",
+      "title": "Spec optics",
+      "description": "Anchor issue (no blockers). Tests the \"default-to-today\" start anchoring path in the cp adapter.",
+      "estimate": {"value": 2, "name": "2 Points"},
+      "url": "https://linear.app/jasongarcia/issue/JAS-5/spec-optics",
+      "status": "Backlog",
+      "statusType": "backlog",
+      "project": "Gantt Skill — Linear Integration Test",
+      "projectId": "d6f4008d-a360-4ca0-a6b1-48481501ad97",
+      "team": "JasonGarcia"
+    }
+  ],
+  "hasNextPage": false
+}

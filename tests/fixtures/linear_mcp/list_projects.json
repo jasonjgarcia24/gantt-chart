@@ -1,0 +1,40 @@
+{
+  "_meta": "Captured from mcp__claude_ai_Linear__list_projects(team='JasonGarcia', query='Gantt Skill') on 2026-05-17. Filtered to the test project. Description in the list view is truncated — full text comes back via get_project.",
+  "projects": [
+    {
+      "id": "d6f4008d-a360-4ca0-a6b1-48481501ad97",
+      "icon": null,
+      "color": "#bec2c8",
+      "name": "Gantt Skill — Linear Integration Test",
+      "summary": "Synthetic project fixture for the gantt-chart skill's Linear integration tests. Safe to delete.",
+      "description": "## Purpose\n\nSynthetic project used as a fixture for the `gantt-chart` skill's Linear integration (Phase 1). The shape exercises:\n\n* A standalone anchor issue (estimate present)\n* A FS chain (one issue blocks another)\n* A fan-in (one issue blocked by two others)\n* A parent / sub-issue hierarchy\n* An issue with no estimate (tests the missing-estimate fallback path)\n* A project milestone\n\n**Safe to delete from the Linear UI anytime — no real work… (truncated, use `get_project` for full description)",
+      "url": "https://linear.app/jasongarcia/project/gantt-skill-linear-integration-test-799fa6cf074a",
+      "createdAt": "2026-05-18T02:23:17.292Z",
+      "updatedAt": "2026-05-18T02:23:17.292Z",
+      "startedAt": "2026-05-18T02:23:17.315Z",
+      "completedAt": null,
+      "canceledAt": null,
+      "startDate": "2026-05-18",
+      "startDateResolution": null,
+      "targetDate": null,
+      "targetDateResolution": null,
+      "priority": {"value": 0, "name": "No priority"},
+      "labels": [],
+      "initiatives": [],
+      "lead": {},
+      "status": {
+        "id": "b442baae-5706-4f1f-b02c-17d6a7cf7132",
+        "name": "In Progress",
+        "type": "started"
+      },
+      "teams": [
+        {
+          "id": "7828966b-eecd-43d0-9c9e-7d535368964e",
+          "name": "JasonGarcia",
+          "key": "JAS"
+        }
+      ]
+    }
+  ],
+  "hasNextPage": false
+}
