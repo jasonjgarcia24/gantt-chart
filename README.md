@@ -498,6 +498,76 @@ Decks:
 
 Full spec: [`docs/specs/deck-generation.md`](docs/specs/deck-generation.md).
 
+### Linear integration (Phase 1, pull-only)
+
+Pull a Linear project into a program tab and run the full gantt
+workflow on it — cascade, critical path, baselines, decks — with no
+copy-paste. **Phase 1 is read-only against Linear.** No writes are
+made to Linear issues; the workbook becomes the analysis surface,
+and a hidden `_LinearSync` tab tracks the wbs↔Linear-id linkage.
+
+Example prompts via `/gantt`:
+
+```
+/gantt pull the Gantt Skill — Linear Integration Test Linear project into a gantt chart called GANTT
+/gantt refresh TPM90 from Linear
+/gantt create a gantt chart from the Linear project at linear.app/.../<slug>
+```
+
+The agent runs the [Linear MCP](https://linear.app/changelog/2024-claude-mcp)
+to fetch project + issues + blocker graph + milestones, normalizes the
+response, and pipes it to the CLI as JSON:
+
+```bash
+<skill>/scripts/gantt linear-pull --stdin --as <program> [--dry-run] [--force]
+```
+
+The agent **always runs `--dry-run` first**, shows you a diff table
+(added / updated / unchanged / workbook-only-preserved per row), and
+asks for confirmation before applying. Conflict policy on re-pull:
+Linear wins on `title`, `state`, `assignee`, `dueDate`, `milestone`;
+workbook wins on `predecessors`, `duration`, `percent_complete`,
+`notes`, `team`. Workbook-only rows (manually added, no Linear ID) are
+preserved untouched.
+
+After a pull, every existing gantt verb works on the new program:
+
+```
+/gantt critical path on GANTT
+/gantt mark task 1 in GANTT as done
+/gantt deck --program=GANTT
+```
+
+Each task's **name cell is a clickable hyperlink** that opens the
+corresponding Linear issue (wrapped as a Sheets `=HYPERLINK(url,
+title)` formula by the pull writer). The hyperlink is lost if you
+rename the task via `gantt task update --name` (plain-text
+overwrite); re-pull restores it.
+
+**MCP requirement**: the `claude_ai_Linear` MCP must be installed and
+authenticated in Claude Code. The CLI itself never calls Linear —
+this is the Arch B (MCP-first) design from the spec.
+
+**Hidden `_LinearSync` tab**: created on first pull, holds `(program,
+wbs_id, linear_id, last_synced, linear_url)` rows for linkage
+tracking. Marked hidden so it doesn't clutter the workbook UI; first
+row says "DO NOT EDIT — managed by gantt linear-pull."
+
+**Cost note**: an N-issue project triggers ~5+N MCP read calls
+(`list_teams` + `list_projects` + `get_project` + `list_issues` +
+**N × `get_issue(includeRelations=true)`** + `list_milestones` +
+`list_issue_statuses`). The agent surfaces this before fetching
+projects with >20 issues.
+
+Spec / plan / tasks / probe notes:
+[`docs/specs/linear-integration.md`](docs/specs/linear-integration.md)
+· [`docs/plans/linear-integration-plan.md`](docs/plans/linear-integration-plan.md)
+· [`docs/plans/linear-integration-tasks.md`](docs/plans/linear-integration-tasks.md)
+· [`docs/notes/linear-mcp-shapes.md`](docs/notes/linear-mcp-shapes.md)
+
+Phase 2 (push workbook → Linear) and Phase 3 (bidirectional sync)
+get their own plan files when ready.
+
 ### Predecessor DSL
 
 Compact form: `<id><relation><signed_lag>?`, comma-separated.
@@ -557,7 +627,14 @@ gantt-chart/
 │               │   ├── slides_io.py    # Slides + Drive API wrappers + decks config
 │               │   ├── templates.py    # slide template builders + section orchestrators
 │               │   └── narrative.py    # Anthropic SDK section summaries (Haiku default)
-│               └── deck_cmds.py        # cmd_deck handler (audiences + program scoping)
+│               ├── deck_cmds.py        # cmd_deck handler (audiences + program scoping)
+│               ├── cp/                 # Linear integration — pure-math JSON contracts
+│               │   ├── contracts.py    # CpInput/CpOutput dataclasses + JSON serde
+│               │   └── adapter.py      # CpInput → Program (reuses cascade.py + critical_path.py)
+│               ├── linear/             # Linear integration — workbook-side state
+│               │   ├── sync_tab.py     # hidden _LinearSync tab CRUD
+│               │   └── pull.py         # pull orchestrator (Linear payload → program tab)
+│               └── linear_cmds.py      # cmd_linear_pull handler (stdin / dry-run / force)
 ├── tests/
 │   ├── test_model.py
 │   ├── test_dsl.py
@@ -576,23 +653,36 @@ gantt-chart/
 │   ├── test_deck_slides_io.py  # config helpers (file-only)
 │   ├── test_deck_templates.py  # request shape + object-id uniqueness
 │   ├── test_deck_cmds.py       # handler tests via FakeSlides+FakeDrive
+│   ├── test_cp_contracts.py    # cp JSON serde round-trip + validation
+│   ├── test_cp_adapter.py      # JSON-graph → cascade engine (6 fixture pairs)
+│   ├── test_linear_sync_tab.py # _LinearSync CRUD via FakeSpreadsheet
+│   ├── test_linear_pull.py     # pull orchestrator (5 fixtures: first / no-change / conflicts / workbook-only / special-chars)
+│   ├── test_linear_cmds.py     # cmd_linear_pull handler — stdin parsing + exit codes
 │   └── fixtures/
 │       ├── programs.py         # shared Program factories
 │       ├── baselines.py        # BaselineRow factory
 │       ├── fake_workbook.py    # in-memory gspread fakes
-│       └── fake_slides.py      # Slides + Drive API fakes
+│       ├── fake_slides.py      # Slides + Drive API fakes
+│       ├── cp/                 # cp engine fixtures (6 JSON inputs)
+│       ├── linear_pull/        # pull-orchestrator fixtures (5 JSON inputs)
+│       └── linear_mcp/         # captured real MCP responses (8 JSON snapshots; for SKILL.md design)
 └── docs/
     ├── ideas/gantt-skill-v0.5.md
     ├── issues/                  # incident write-ups (e.g. baseline-clear-quota.md)
+    ├── notes/
+    │   └── linear-mcp-shapes.md # T6 probe findings — informs SKILL.md normalization
     ├── specs/
     │   ├── baseline-tracking.md
-    │   └── deck-generation.md
+    │   ├── deck-generation.md
+    │   └── linear-integration.md  # Linear pull/push/sync (Phase 1 = pull)
     └── plans/
         ├── v0.5-backlog.md
         ├── baseline-tracking-plan.md
         ├── baseline-tracking-tasks.md
         ├── deck-generation-plan.md
-        └── deck-generation-tasks.md
+        ├── deck-generation-tasks.md
+        ├── linear-integration-plan.md
+        └── linear-integration-tasks.md
 ```
 
 ---
@@ -604,7 +694,7 @@ top-level `conftest.py` prepends `skills/gantt/scripts/` to `sys.path` so
 tests at the repo root can `import gantt_lib.*` without being skill-aware.
 
 ```bash
-# Run the full suite (currently 358 tests):
+# Run the full suite (currently 428 tests):
 skills/gantt/.venv/bin/python3 -m pytest tests/ -v
 
 # One module:
