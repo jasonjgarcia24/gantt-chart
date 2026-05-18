@@ -498,75 +498,122 @@ Decks:
 
 Full spec: [`docs/specs/deck-generation.md`](docs/specs/deck-generation.md).
 
-### Linear integration (Phase 1, pull-only)
+### Linear integration (full bidirectional sync)
 
-Pull a Linear project into a program tab and run the full gantt
-workflow on it — cascade, critical path, baselines, decks — with no
-copy-paste. **Phase 1 is read-only against Linear.** No writes are
-made to Linear issues; the workbook becomes the analysis surface,
-and a hidden `_LinearSync` tab tracks the wbs↔Linear-id linkage.
+Sync a Linear project bidirectionally with a program tab. Pull Linear
+changes into the workbook, push workbook changes back to Linear,
+create new Linear issues for workbook-only tasks, and archive Linear
+issues for deleted workbook rows — all in one `gantt linear-sync`
+invocation. After a sync, the workbook and Linear agree per a 3-way
+merge conflict policy.
 
 Example prompts via `/gantt`:
 
 ```
-/gantt pull the Gantt Skill — Linear Integration Test Linear project into a gantt chart called GANTT
-/gantt refresh TPM90 from Linear
-/gantt create a gantt chart from the Linear project at linear.app/.../<slug>
+/gantt sync TPM90 with Linear
+/gantt push my TPM90 changes to Linear
+/gantt what's different between TPM90 and Linear
+/gantt refresh TPM90 from Linear                           # pull only
+/gantt pull the X Linear project into a gantt chart called TPM90   # first-time pull
 ```
 
 The agent runs the [Linear MCP](https://linear.app/changelog/2024-claude-mcp)
-to fetch project + issues + blocker graph + milestones, normalizes the
-response, and pipes it to the CLI as JSON:
+for both reads (project + issues + blocker graph + milestones) and
+writes (`save_issue` for updates / creates / archives), normalizes
+into JSON, and pipes to the CLI:
 
 ```bash
-<skill>/scripts/gantt linear-pull --stdin --as <program> [--dry-run] [--force]
+<skill>/scripts/gantt linear-sync --stdin --as <program> [--dry-run] [--direction={pull,push,both}] [--force]
 ```
 
-The agent **always runs `--dry-run` first**, shows you a diff table
-(added / updated / unchanged / workbook-only-preserved per row), and
-asks for confirmation before applying. Conflict policy on re-pull:
-Linear wins on `title`, `state`, `assignee`, `dueDate`, `milestone`;
-workbook wins on `predecessors`, `duration`, `percent_complete`,
-`notes`, `team`. Workbook-only rows (manually added, no Linear ID) are
-preserved untouched.
+Two aliases for convenience:
+- `gantt linear-push` — same as `linear-sync --direction=push`
+- `gantt linear-pull` — Phase-1-compat read-only path (kept for prompts/tools that still target it)
 
-After a pull, every existing gantt verb works on the new program:
+**Three-way merge**: every sync compares three values per field:
+
+- **W** = current workbook value
+- **S** = stored snapshot (last-known Linear from previous sync)
+- **L** = current Linear value
+
+| W vs S | L vs S | Action |
+|---|---|---|
+| equal | equal | no-op |
+| changed | equal | push W → Linear |
+| equal | changed | pull L → workbook |
+| changed | changed, W==L | converged (no cross-write) |
+| changed | changed, W≠L | true conflict — per-field default winner |
+
+**Per-field default conflict policy**:
+- **Linear wins**: `title`, `state`, `assignee`, `dueDate`, `parent`, `milestone`
+- **Workbook wins**: `predecessors` (FS/SS/FF/SF + lag), `percent_complete`, `notes`, `team`, `blockedby`
+- **Estimate**: workbook wins if non-default, else Linear wins
+
+**Dry-run-first with two-stage confirmation**: agent always runs
+`--dry-run` first and renders the diff table. If the diff has only
+updates / pulls / unchanged rows, it auto-applies (no second prompt).
+If it has creates or archives, agent asks once before applying —
+those are higher-stakes (wrong create makes Linear noise; wrong
+archive destroys team context).
+
+**Hidden `_LinearSync` tab (18 cols)**: stores the wbs↔linear-id
+linkage, the workbook-only sidecar fields (predecessors DSL, percent,
+notes, team), and the last-known Linear snapshot per issue (title,
+state, assignee, dueDate, estimate, blockedBy, parent, milestone) for
+3-way merge. Auto-migrates from the 5-col Phase-1 schema on first
+Phase-2 sync; existing identity rows preserved, new cols blank-filled.
+
+**Pure-math CLI + agent-orchestrated MCP** (Arch B unchanged from
+Phase 1): the CLI never calls Linear; the agent dispatches all MCP
+calls. The CLI returns a `mcp_requests` list in its JSON output
+describing each `save_issue` to dispatch in two passes:
+
+- **Pass 1** (independent, parallel): updates, creates without
+  blockedBy, archives. Up to ~10-20 calls per Claude turn.
+- **Pass 2** (depends on pass 1): blockedBy reconciliation with
+  `__NEW_<wbs>__` placeholder substitution after pass-1 returns the
+  new linear_ids.
+
+**Cost model**: 1 MCP write call per *changed issue* (not per field —
+`save_issue` collapses field updates). Parallel-dispatch in one Claude
+turn drops the turn count from O(N) to ~O(N/20). For a 30-issue full
+sync with 10 changes: ~5-10 read calls + ~10 write calls across ~1
+write turn. Tractable inside an interactive `/gantt` flow.
+
+**Linear-MCP gotcha (P2-T8 probe)**: `save_issue` accepts an invalid
+`state` name silently — returns 200-OK with the issue unchanged.
+Agent populates `linear_archive_state` from the team's actual
+`list_issue_statuses` response, never hard-codes. Watches `updatedAt`
+on each response to detect silent no-ops.
+
+After a sync, every existing gantt verb works on the program:
 
 ```
-/gantt critical path on GANTT
-/gantt mark task 1 in GANTT as done
-/gantt deck --program=GANTT
+/gantt critical path on TPM90
+/gantt mark task 1 in TPM90 as done
+/gantt deck --program=TPM90
 ```
 
-Each task's **name cell is a clickable hyperlink** that opens the
-corresponding Linear issue (wrapped as a Sheets `=HYPERLINK(url,
-title)` formula by the pull writer). The hyperlink is lost if you
-rename the task via `gantt task update --name` (plain-text
-overwrite); re-pull restores it.
+Each task name cell is a clickable hyperlink to the Linear issue
+(Sheets `=HYPERLINK(url, title)` formula on the name column).
 
-**MCP requirement**: the `claude_ai_Linear` MCP must be installed and
-authenticated in Claude Code. The CLI itself never calls Linear —
-this is the Arch B (MCP-first) design from the spec.
-
-**Hidden `_LinearSync` tab**: created on first pull, holds `(program,
-wbs_id, linear_id, last_synced, linear_url)` rows for linkage
-tracking. Marked hidden so it doesn't clutter the workbook UI; first
-row says "DO NOT EDIT — managed by gantt linear-pull."
-
-**Cost note**: an N-issue project triggers ~5+N MCP read calls
-(`list_teams` + `list_projects` + `get_project` + `list_issues` +
-**N × `get_issue(includeRelations=true)`** + `list_milestones` +
-`list_issue_statuses`). The agent surfaces this before fetching
-projects with >20 issues.
+**MCP requirement**: the `claude_ai_Linear` MCP must be installed
+and authenticated in Claude Code. For push direction, the agent also
+needs write permission entries in `~/.claude/settings.json`
+(`mcp__claude_ai_Linear__save_issue` and `mcp__claude_ai_Linear__save_milestone`).
 
 Spec / plan / tasks / probe notes:
 [`docs/specs/linear-integration.md`](docs/specs/linear-integration.md)
 · [`docs/plans/linear-integration-plan.md`](docs/plans/linear-integration-plan.md)
+(Phase 1)
 · [`docs/plans/linear-integration-tasks.md`](docs/plans/linear-integration-tasks.md)
+(Phase 1)
+· [`docs/plans/linear-integration-phase2-plan.md`](docs/plans/linear-integration-phase2-plan.md)
+· [`docs/plans/linear-integration-phase2-tasks.md`](docs/plans/linear-integration-phase2-tasks.md)
 · [`docs/notes/linear-mcp-shapes.md`](docs/notes/linear-mcp-shapes.md)
-
-Phase 2 (push workbook → Linear) and Phase 3 (bidirectional sync)
-get their own plan files when ready.
+(read-side probe)
+· [`docs/notes/linear-mcp-write-shapes.md`](docs/notes/linear-mcp-write-shapes.md)
+(write-side probe)
 
 ### Predecessor DSL
 
@@ -631,10 +678,14 @@ gantt-chart/
 │               ├── cp/                 # Linear integration — pure-math JSON contracts
 │               │   ├── contracts.py    # CpInput/CpOutput dataclasses + JSON serde
 │               │   └── adapter.py      # CpInput → Program (reuses cascade.py + critical_path.py)
-│               ├── linear/             # Linear integration — workbook-side state
-│               │   ├── sync_tab.py     # hidden _LinearSync tab CRUD
-│               │   └── pull.py         # pull orchestrator (Linear payload → program tab)
-│               └── linear_cmds.py      # cmd_linear_pull handler (stdin / dry-run / force)
+│               ├── linear/             # Linear integration — workbook-side state + sync
+│               │   ├── sync_tab.py     # hidden _LinearSync tab CRUD + Phase-1→Phase-2 migration
+│               │   ├── snapshot.py     # IssueSnapshot + 3-way merge equality helpers
+│               │   ├── merge.py        # 3-way merge engine (classify_field, compute_sync_diff)
+│               │   ├── push.py         # SyncDiff → MCPRequest descriptors (two-pass)
+│               │   ├── sync.py         # top-level orchestrator (pull + merge + push composed)
+│               │   └── pull.py         # Phase-1-compat pull orchestrator (read-only)
+│               └── linear_cmds.py      # cmd_linear_pull + cmd_linear_sync handlers
 ├── tests/
 │   ├── test_model.py
 │   ├── test_dsl.py
@@ -656,8 +707,14 @@ gantt-chart/
 │   ├── test_cp_contracts.py    # cp JSON serde round-trip + validation
 │   ├── test_cp_adapter.py      # JSON-graph → cascade engine (6 fixture pairs)
 │   ├── test_linear_sync_tab.py # _LinearSync CRUD via FakeSpreadsheet
-│   ├── test_linear_pull.py     # pull orchestrator (5 fixtures: first / no-change / conflicts / workbook-only / special-chars)
-│   ├── test_linear_cmds.py     # cmd_linear_pull handler — stdin parsing + exit codes
+│   ├── test_linear_sync_tab_migration.py # Phase-1 → Phase-2 schema migration
+│   ├── test_linear_snapshot.py # IssueSnapshot + equality helpers
+│   ├── test_linear_merge.py    # 3-way merge engine (8 scenarios)
+│   ├── test_linear_push.py     # SyncDiff → MCPRequest descriptors (two-pass)
+│   ├── test_linear_sync.py     # top-level sync orchestrator (3 directions + dry-run + force)
+│   ├── test_linear_pull.py     # Phase-1-compat pull (5 fixtures)
+│   ├── test_linear_cmds.py     # cmd_linear_pull handler
+│   ├── test_linear_cmds_sync.py # cmd_linear_sync handler
 │   └── fixtures/
 │       ├── programs.py         # shared Program factories
 │       ├── baselines.py        # BaselineRow factory
@@ -665,24 +722,27 @@ gantt-chart/
 │       ├── fake_slides.py      # Slides + Drive API fakes
 │       ├── cp/                 # cp engine fixtures (6 JSON inputs)
 │       ├── linear_pull/        # pull-orchestrator fixtures (5 JSON inputs)
-│       └── linear_mcp/         # captured real MCP responses (8 JSON snapshots; for SKILL.md design)
+│       └── linear_mcp/         # captured real MCP responses (13 JSON snapshots; 8 read-side + 5 write-side)
 └── docs/
     ├── ideas/gantt-skill-v0.5.md
     ├── issues/                  # incident write-ups (e.g. baseline-clear-quota.md)
     ├── notes/
-    │   └── linear-mcp-shapes.md # T6 probe findings — informs SKILL.md normalization
+    │   ├── linear-mcp-shapes.md       # Phase-1 T6 probe — Linear MCP read-side shapes
+    │   └── linear-mcp-write-shapes.md # Phase-2 T8 probe — save_issue shapes + silent-no-op warning
     ├── specs/
     │   ├── baseline-tracking.md
     │   ├── deck-generation.md
-    │   └── linear-integration.md  # Linear pull/push/sync (Phase 1 = pull)
+    │   └── linear-integration.md  # Linear pull (Phase 1) + full bidirectional sync (Phase 2)
     └── plans/
         ├── v0.5-backlog.md
         ├── baseline-tracking-plan.md
         ├── baseline-tracking-tasks.md
         ├── deck-generation-plan.md
         ├── deck-generation-tasks.md
-        ├── linear-integration-plan.md
-        └── linear-integration-tasks.md
+        ├── linear-integration-plan.md          # Phase 1
+        ├── linear-integration-tasks.md         # Phase 1
+        ├── linear-integration-phase2-plan.md   # Phase 2
+        └── linear-integration-phase2-tasks.md  # Phase 2
 ```
 
 ---
@@ -694,7 +754,7 @@ top-level `conftest.py` prepends `skills/gantt/scripts/` to `sys.path` so
 tests at the repo root can `import gantt_lib.*` without being skill-aware.
 
 ```bash
-# Run the full suite (currently 428 tests):
+# Run the full suite (currently 532 tests):
 skills/gantt/.venv/bin/python3 -m pytest tests/ -v
 
 # One module:
