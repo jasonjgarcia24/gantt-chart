@@ -150,15 +150,18 @@ def test_update_estimate_zero_skipped():
     assert reqs == []  # nothing to push (estimate was the only changed field)
 
 
-def test_update_due_date_clears_to_none():
-    """Clearing the dueDate on workbook side → save_issue dueDate=None."""
+def test_update_due_date_push_is_skipped_in_phase2_v1():
+    """due_date is workbook-only in Phase 2 v1 — workbook task.end is
+    a cascade output, not user intent. Pushing it to Linear's dueDate
+    (which IS user intent) causes recompute-loops and semantic
+    mismatch. See `_push_field_kwargs` doc comment for the design
+    note + Phase-2.1 follow-up plan."""
     row = _mk_update_row(field_changes=[
-        _fc("due_date", "", "2026-06-01", "2026-06-01",
-            FieldClassification.PUSH, "", "workbook"),
+        _fc("due_date", "2026-06-01", "", "",
+            FieldClassification.PUSH, "2026-06-01", "workbook"),
     ])
     reqs = _build([row])
-    assert len(reqs) == 1
-    assert reqs[0].kwargs == {"id": "JAS-5", "dueDate": None}
+    assert reqs == []
 
 
 # --- create rows -------------------------------------------------------------

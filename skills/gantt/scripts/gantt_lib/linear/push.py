@@ -88,11 +88,18 @@ def _push_field_kwargs(field_changes: list[FieldChange]) -> dict[str, Any]:
     and any conflict where the winner is Linear.
     """
     # Internal snapshot name → Linear MCP save_issue param name.
+    # NOTE: `due_date` is intentionally absent. The workbook's task.end
+    # is a cascade-computed projection, not a user-set hard target;
+    # Linear's dueDate is the opposite. Pushing computed end dates as
+    # Linear dueDates causes loops on every cascade recompute and
+    # mismatches the semantic of "this is when we *commit* to ship."
+    # Filed as GH issue for revisit (Phase 2.1): treat workbook end as
+    # pushable only when the user has set a manual anchor (Task needs a
+    # `manual_end_anchor` field to track that).
     field_to_mcp = {
         "title": "title",
         "state": "state",
         "assignee": "assignee",
-        "due_date": "dueDate",
         "estimate": "estimate",
         "parent": "parentId",
     }
@@ -111,6 +118,10 @@ def _push_field_kwargs(field_changes: list[FieldChange]) -> dict[str, Any]:
         # blockedby is handled separately (pass 2) since it may reference
         # newly-created issues; skip here.
         if fc.field == "blockedby":
+            continue
+
+        # due_date: see field_to_mcp comment above — Phase 2 v1 skips.
+        if fc.field == "due_date":
             continue
 
         mcp_key = field_to_mcp.get(fc.field)
