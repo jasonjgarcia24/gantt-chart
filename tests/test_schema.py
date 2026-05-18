@@ -49,8 +49,10 @@ def test_data_headers_match_v1_schema():
     assert DATA_HEADERS[11] == "Milestone?"
 
 
-def test_status_values_are_the_five_documented():
-    assert STATUS_VALUES == ["Not Started", "In Progress", "Blocked", "At Risk", "Done"]
+def test_status_values_match_full_enum():
+    assert STATUS_VALUES == [
+        "Not Started", "In Progress", "Blocked", "At Risk", "Done", "Cancelled",
+    ]
 
 
 @pytest.mark.parametrize("idx,letter", [

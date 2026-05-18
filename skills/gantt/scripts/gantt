@@ -1130,7 +1130,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="0-100 percent complete")
         p.add_argument("--status", default=None,
                        choices=["Not Started", "In Progress", "Blocked",
-                                "At Risk", "Done"])
+                                "At Risk", "Done", "Cancelled"])
         p.add_argument("--predecessors", default=None,
                        help='DSL string, e.g. "1.2FS+3, 1.3SS"')
         p.add_argument(

@@ -120,8 +120,9 @@ def test_status_values_are_documented():
     assert Status.BLOCKED == "Blocked"
     assert Status.AT_RISK == "At Risk"
     assert Status.DONE == "Done"
+    assert Status.CANCELLED == "Cancelled"
     assert set(Status.all()) == {
-        "Not Started", "In Progress", "Blocked", "At Risk", "Done",
+        "Not Started", "In Progress", "Blocked", "At Risk", "Done", "Cancelled",
     }
 
 

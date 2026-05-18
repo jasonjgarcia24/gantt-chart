@@ -95,3 +95,29 @@ def test_missing_predecessor_id_is_ignored_for_blocker_check():
 def test_milestone_done_at_full_pct():
     t = _t("M", pct=100)
     assert compute_status(t, {"M": t}, TODAY) == Status.DONE
+
+
+# ---------- Cancelled preservation ----------
+
+
+def test_cancelled_status_preserved_at_zero_percent():
+    """A task pulled from Linear in canceled-type state lands in the
+    workbook with status=Cancelled. Without rule-0 preservation,
+    auto_status would rewrite it to Not Started (because pct=0), and
+    the next Linear sync would push that back as un-archive."""
+    t = _t("1", pct=0, status=Status.CANCELLED)
+    assert compute_status(t, {"1": t}, TODAY) == Status.CANCELLED
+
+
+def test_cancelled_status_preserved_even_with_predecessors_and_started_date():
+    """Cancelled wins over the in-progress / blocked path entirely —
+    the task is in a terminal state, not actively being worked."""
+    pred = _t("1", pct=50)
+    t = _t("2", pct=30, start=PAST, predecessors="1FS", status=Status.CANCELLED)
+    assert compute_status(t, {"1": pred, "2": t}, TODAY) == Status.CANCELLED
+
+
+def test_cancelled_status_included_in_enum():
+    """Sanity check: Cancelled is in the canonical Status set."""
+    assert Status.CANCELLED == "Cancelled"
+    assert Status.CANCELLED in Status.all()

@@ -17,16 +17,28 @@ NUM_COLUMNS = 13
 
 
 class Status:
-    """Status enum values written to / read from column J."""
+    """Status enum values written to / read from column J.
+
+    Cancelled was added for round-trip with Linear's canceled-type
+    states. Without it, a task pulled from Linear in Canceled state
+    would get its status silently rewritten by auto_status on next
+    recalc — which would then push the wrong state back to Linear on
+    sync (un-archiving the issue). See `compute_status` for the
+    preservation carve-out.
+    """
     NOT_STARTED = "Not Started"
     IN_PROGRESS = "In Progress"
     BLOCKED = "Blocked"
     AT_RISK = "At Risk"
     DONE = "Done"
+    CANCELLED = "Cancelled"
 
     @classmethod
     def all(cls) -> list[str]:
-        return [cls.NOT_STARTED, cls.IN_PROGRESS, cls.BLOCKED, cls.AT_RISK, cls.DONE]
+        return [
+            cls.NOT_STARTED, cls.IN_PROGRESS, cls.BLOCKED, cls.AT_RISK,
+            cls.DONE, cls.CANCELLED,
+        ]
 
 
 def _pad_row(row: list[str], n: int = NUM_COLUMNS) -> list[str]:
