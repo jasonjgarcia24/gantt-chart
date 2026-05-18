@@ -39,7 +39,7 @@ def test_ensure_creates_tab_with_headers_and_warning():
     ws = ensure_sync_tab(ss)
     assert ws.title == SYNC_TAB
     # Row 1 = headers, row 2 = warning.
-    headers = ws.get_values("A1:E1")[0]
+    headers = ws.get_values(f"A1:{chr(ord('A') + len(SYNC_HEADERS) - 1)}1")[0]
     assert headers == SYNC_HEADERS
     warning = ws.get_values("A2:A2")[0][0]
     assert "DO NOT EDIT" in warning
