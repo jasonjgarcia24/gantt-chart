@@ -1,6 +1,6 @@
 ---
 name: gantt
-description: Operate the user's program portfolio workbook in Google Sheets via the skill-bundled `gantt` CLI at scripts/gantt (under this skill's base directory). USE THIS SKILL whenever the user mentions any of — program plans, program tabs (named like P_TPM90, P_Q3Launch — short program tokens), task progress updates ("OK2DC is 50% done", "task 1.2 is complete", "mark X done"), task scheduling or duration changes ("the eyepiece fab task should be 8 days not 5"), dependencies / predecessors (FS / SS / FF / SF, "depends on", "after task 2"), shifting tasks ("push the launch milestone out 2 weeks", "pull task 5 in by 3 days"), recalculating dates after sheet edits ("I edited a few rows, recalc TPM90"), critical-path queries on the workbook ("what's the critical path in TPM90", "what tasks are blocked"), creating a new program ("create a new program called Q3Launch"), milestones in the workbook, or ANY task referenced by WBS id (e.g. 1, 5.2, OK2DC). When the user refers to a program by a short token (e.g. TPM90, Q3Launch), this skill applies. Capabilities: add / update / delete tasks; cascade dates via topo sort + working-days math; auto-derive Status from %complete + dependencies; shift tasks ±N working days; compute critical path with bold highlighting; sort rows by WBS id; snapshot and inspect baselines; generate audience-targeted Google Slides decks. Does NOT handle: gantt visualizations in matplotlib / plotly / Python libraries (those use the libraries directly); metaphorical critical-path / milestone language (hiring, standups, meetings); Asana / Jira / Linear / Trello tasks; calendar scheduling (standups, meetings, milestone-review events); generic PM-vocabulary questions ("what does FS mean"); arbitrary Google Sheets unrelated to the portfolio workbook.
+description: Operate the user's program portfolio workbook in Google Sheets via the skill-bundled `gantt` CLI at scripts/gantt (under this skill's base directory). USE THIS SKILL whenever the user mentions any of — program plans, program tabs (named like P_TPM90, P_Q3Launch — short program tokens), task progress updates ("OK2DC is 50% done", "task 1.2 is complete", "mark X done"), task scheduling or duration changes ("the eyepiece fab task should be 8 days not 5"), dependencies / predecessors (FS / SS / FF / SF, "depends on", "after task 2"), shifting tasks ("push the launch milestone out 2 weeks", "pull task 5 in by 3 days"), recalculating dates after sheet edits ("I edited a few rows, recalc TPM90"), critical-path queries on the workbook ("what's the critical path in TPM90", "what tasks are blocked"), creating a new program ("create a new program called Q3Launch"), milestones in the workbook, or ANY task referenced by WBS id (e.g. 1, 5.2, OK2DC). When the user refers to a program by a short token (e.g. TPM90, Q3Launch), this skill applies. ALSO triggers on Linear pulls (Phase 1): "pull the X Linear project into a gantt chart", "refresh TPM90 from Linear", "create a gantt chart from the Linear project X", "pull from Linear" — anything that maps a Linear project's issues into a program tab. Linear URLs (linear.app) or team-key prefixes (e.g. "JAS-5") also count. Capabilities: add / update / delete tasks; cascade dates via topo sort + working-days math; auto-derive Status from %complete + dependencies; shift tasks ±N working days; compute critical path with bold highlighting; sort rows by WBS id; snapshot and inspect baselines; generate audience-targeted Google Slides decks; pull a Linear project into a program tab via the Linear MCP (read-only against Linear in Phase 1). Does NOT handle: gantt visualizations in matplotlib / plotly / Python libraries (those use the libraries directly); metaphorical critical-path / milestone language (hiring, standups, meetings); writes back to Linear (push/sync are Phase 2+); Asana / Jira / Trello (other PM tools); calendar scheduling (standups, meetings, milestone-review events); generic PM-vocabulary questions ("what does FS mean"); arbitrary Google Sheets unrelated to the portfolio workbook.
 tools: Bash
 ---
 
@@ -75,6 +75,184 @@ The user describes operations conversationally; translate to flags.
 - **Default `--team`:** leave blank if not specified. Do not invent values.
 - **Mutations auto-cascade.** `task add`, `task update`, and `shift` print TWO lines (mutation + recalc). Surface both.
 
+## Linear MCP mode (Phase 1: pull only)
+
+When the user wants to pull a Linear project into the workbook, route to
+this mode. After the pull, every existing gantt verb (`recalc`,
+`critical-path`, `deck`, `baseline`, `shift`, etc.) works on the pulled
+program identically to a workbook-native one.
+
+**Phase 1 is read-only against Linear.** No writes are made to Linear
+issues, descriptions, relations, or anything else. Push/sync are Phase 2+.
+
+### Trigger language
+
+Prompts that should route to Linear pull mode:
+
+- "pull the X Linear project into a gantt chart [called TPM90]"
+- "refresh TPM90 from Linear"
+- "create a gantt chart from the Linear project X"
+- "pull the Linear project at linear.app/.../<slug>"
+- any URL of the form `https://linear.app/<workspace>/project/<slug>`
+- any prompt that mentions Linear plus a target program name
+
+### Source detection rule
+
+If the user names a Linear project (URL, team-key prefix like `JAS-`, or
+explicit "linear" keyword) AND a target program (e.g. `--as TPM90`),
+route to Linear pull mode. If the target program isn't obvious from the
+prompt, ask once before guessing — never invent a tab name.
+
+If both a workbook program and a Linear project plausibly match the
+user's words, ask once to disambiguate. Never guess.
+
+### MCP call sequence
+
+Use the `claude_ai_Linear` MCP (must be installed + authenticated in
+Claude Code; if it isn't, tell the user and stop). Call sequence:
+
+1. `mcp__claude_ai_Linear__list_teams()` — cache for the session
+2. `mcp__claude_ai_Linear__list_projects(team=<team>, query=<name-or-slug>)` — resolve project ID
+3. `mcp__claude_ai_Linear__get_project(query=<id>, includeMilestones=true)` — full description + milestones
+4. `mcp__claude_ai_Linear__list_issues(project=<id>)` — all issues (paginate via `cursor` if `hasNextPage` is true; up to 250 per page)
+5. **For every issue:** `mcp__claude_ai_Linear__get_issue(id=<issue>, includeRelations=true)` — needed because `list_issues` does NOT include `blockedBy` / `relations`. This is the dominant per-pull cost: roughly N MCP calls for an N-issue project.
+6. `mcp__claude_ai_Linear__list_milestones(project=<id>)` — prefer this over `get_project(includeMilestones)` because the shape is cleaner (numeric `progress` 0..1 instead of percent string)
+7. `mcp__claude_ai_Linear__list_issue_statuses(team=<team>)` — cache for the session; needed for state-name → workbook-Status mapping when teams have custom states
+
+Cost note: surface to the user before step 5 fires if the project has
+more than ~20 issues. Example: *"This project has 47 issues — fetching
+blocker data will take ~47 MCP calls. Proceed? (Y/n)"*
+
+### Normalization recipe (MCP responses → `linear-pull --stdin` JSON)
+
+Build the JSON payload that the CLI expects. Field-by-field:
+
+| `CpInput*` field | MCP source | Notes |
+|---|---|---|
+| `project.name` | `get_project.name` | Used in agent rendering only |
+| `project.source` | literal `"linear"` | |
+| `project.source_ref` | `get_project.url` | Deep link for traceability |
+| `config.default_duration_days` | `1` | Or whatever the user prefers; surface in dry-run |
+| `config.today` | today's ISO date | Used to anchor issues with no blockers + no startedAt |
+| `config.estimate_to_days.ratio` | `1.0` for points→days | Detect unit from issue `estimate.name` (see below) |
+| `issues[].linear_id` | `issue.id` (e.g. `JAS-5`) | The Linear identifier, not the UUID |
+| `issues[].title` | `issue.title` | |
+| `issues[].state` | mapped from `issue.statusType` | See state mapping table below — map by **type**, not name |
+| `issues[].estimate_days` | `issue.estimate.value × estimate_to_days.ratio` | If `estimate` is absent, leave `null` — adapter will warn + use default |
+| `issues[].percent` | always `0` for now | Linear doesn't carry %complete |
+| `issues[].assignee` | `issue.assignee.email` if present else `""` | Email preferred over display name |
+| `issues[].start_anchor` | `issue.startedAt` or `null` | For issues with no blockers |
+| `issues[].end_anchor` | `issue.dueDate` or `null` | |
+| `issues[].is_milestone` | `false` for regular issues; `true` for synthesized milestone tasks | See milestone synthesis below |
+| `issues[].parent_linear_id` | `issue.parentId` or `null` | Stable identifier; CLI uses for WBS hierarchy |
+| `issues[].linear_url` | `issue.url` | Used by CLI for HYPERLINK formula on the name cell |
+| `edges[]` | from `get_issue(includeRelations=true).relations.blockedBy` per issue | Each `blockedBy` item → one edge: `{from_linear_id, to_linear_id, type: "FS", lag_days: 0}` |
+
+**State mapping** (always by `statusType`, not `status` name):
+
+| Linear `statusType` | Workbook `state` |
+|---|---|
+| `backlog` | `Not Started` |
+| `unstarted` | `Not Started` |
+| `started` | `In Progress` |
+| `completed` | `Done` |
+| `canceled` | `Cancelled` |
+
+**Estimate unit detection** — read the first non-null `estimate.name`
+across the project's issues:
+
+| `estimate.name` example | Inferred unit | Default ratio (→ days) |
+|---|---|---|
+| `"5 Points"` | points | 1.0 |
+| `"8 Hours"` | hours | 0.125 (8h = 1 day) |
+| `"L"`, `"M"`, etc. | t-shirt | manual user input — ask |
+| (no estimates) | none | 1.0 (use default_duration_days for all) |
+
+Surface the detected unit and the conversion in the dry-run preview so
+the user can confirm before applying.
+
+**Milestone synthesis** — for each entry in `list_milestones`, append a
+synthetic issue to the payload with:
+- `linear_id`: the milestone's UUID prefixed with `MS-` (e.g. `MS-0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d`) so it doesn't collide with real issue keys
+- `title`: the milestone name
+- `is_milestone`: `true`
+- `estimate_days`: `0`
+- `linear_url`: the project URL with `?milestone=<id>` query, if Linear provides one (else just the project URL)
+- No edges; the agent can optionally add an edge from the last
+  non-milestone issue to the milestone if it makes sense (skip if
+  unsure — milestones can be free-floating).
+
+**Pagination** — if `list_issues.hasNextPage` is true, follow `cursor`
+and merge pages before invoking the CLI.
+
+### Dry-run-first convention (always)
+
+The agent ALWAYS runs `linear-pull` with `--dry-run` first, then asks
+the user to confirm before applying. Pull is a real workbook write —
+matching the skill's existing "confirm-before-side-effect" pattern.
+
+Flow:
+
+1. Fetch + normalize → JSON payload
+2. Run `<skill-base-dir>/scripts/gantt linear-pull --stdin --as <program> --dry-run`,
+   piping the JSON payload via stdin
+3. Parse the stdout JSON summary; render the diff to the user as a
+   markdown table (see Rendering below)
+4. Ask: *"Apply this? (y/n)"*
+5. On `y`: re-run the same command without `--dry-run`; surface the
+   result line at the top of the response per the skill's convention.
+6. On `n`: stop; don't write.
+
+### CLI invocation
+
+Construct the absolute path:
+```
+<skill-base-dir>/scripts/gantt linear-pull --stdin --as <program> [--dry-run] [--force]
+```
+
+Capture stdout (JSON) separately from stderr (result line) — the
+result line goes at the top of your response verbatim per the
+skill's convention.
+
+If the program tab doesn't exist yet (CLI returns
+`program_tab_missing` error), tell the user and ask whether to create
+it first via `<skill-base-dir>/scripts/gantt program new <program>`,
+then retry the pull.
+
+### Rendering
+
+After the dry-run summary, present the diff as a markdown table:
+
+| Action | WBS | Linear ID | Title | Changed fields |
+|---|---|---|---|---|
+| added | 1 | JAS-5 | Spec optics | — |
+| updated | 2 | JAS-6 | Eyepiece fab | state: Backlog→In Progress (linear) |
+| unchanged | 3 | JAS-7 | Doc revision | — |
+| workbook_only_preserved | 4 | — | Manual checkpoint | — |
+
+Below the table:
+
+- One-line summary: *"N added, M updated, K unchanged"*
+- Any warnings as a bulleted sub-list (e.g. *"JAS-7: no estimate; using
+  default 1d"*)
+- Snapshot disclaimer: *"Snapshot fetched at HH:MM:SS — Linear may have
+  changed since."*
+- The "Apply this? (y/n)" prompt
+
+After apply, the agent's response opens with the verified result line
+(`gantt: linear-pull <program> — N added, M updated, K unchanged ✓`)
+per the existing skill convention.
+
+### Error handling
+
+| CLI error / exit code | How to render |
+|---|---|
+| `contract_validation` (exit 1) | "I built a malformed payload — bug in normalization. Try again or report: \<error detail>." Don't retry — the bug is in the agent, not the user's input. |
+| `program_tab_missing` (exit 2) | "Program tab `P_<program>` doesn't exist. Run `gantt program new <program>` first? (y/n)" |
+| `cycle_detected` (exit 2) | Surface the trace as Linear-issue links so user can fix the cycle in Linear. Re-pull after fix. |
+| `unanchored_task` (exit 2) | An existing workbook row has no predecessors and no manual start. Tell the user to run `gantt recalc <program>` to surface the offending row. |
+| `internal` (exit 3) | Show the error verbatim; tell user to retry. |
+
 ## First-run handling
 
 `gantt` has three first-run states. Handle each separately:
@@ -92,7 +270,8 @@ Every `gantt` command prints a verified line that starts with `gantt:` and ends 
 ## Things this skill does NOT do
 
 - **Fuzzy task lookup by name** — always ask the user for the WBS id when ambiguous.
-- **Linear / Jira sync** — out of scope for v0.5.
+- **Linear push / sync** — Phase 1 supports Linear → workbook pull only. Writes back to Linear (push) and bidirectional sync are Phase 2+.
+- **Jira / Asana / Trello sync** — out of scope.
 - **Multi-PM concurrent edit reconciliation** — single-writer model. If another PM edits the sheet, re-run `recalc` to re-cascade.
 - **Sub-day granularity, per-team calendars, multiple critical paths** — single critical path only; days only.
 - **Renaming WBS ids on cleanup** — `recalc` sorts rows by WBS id but never changes ids (would break predecessor references).
