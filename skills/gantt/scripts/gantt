@@ -444,7 +444,11 @@ def cmd_program_new(args: argparse.Namespace) -> int:
                     end_col_idx_exclusive=schema.TIMELINE_FIRST_COL_IDX + end_idx + 1,
                 ))
 
-    # CF rules: weekend (top priority, last added) > team colors.
+    # CF rules: weekend (top priority, last added) > per-team colors >
+    # default-team color (fallback for blank-team rows). Each rule is
+    # added at index 0, so insertion order = reverse of evaluation
+    # priority. Default goes first (lowest priority).
+    requests.append(schema.default_team_color_cf_request(ws.id))
     for team_name, hex_color in palette:
         requests.append(schema.team_color_cf_request(ws.id, team_name, hex_color))
     requests.append(schema.weekend_cf_request(ws.id))

@@ -12,6 +12,7 @@ import pytest
 from gantt_lib.schema import (
     DATA_HEADERS,
     DAY_HEADER_ROW,
+    DEFAULT_TEAM_COLOR,
     HEADER_ROWS,
     NUM_DATA_COLS,
     PROGRAM_TAB_PREFIX,
@@ -21,12 +22,14 @@ from gantt_lib.schema import (
     boundary_border_request,
     col_letter,
     day_row_format_request,
+    default_team_color_cf_request,
     grouping_runs,
     hex_to_rgb01,
     make_timeline_days,
     month_label,
     program_tab_name,
     quarter_label,
+    team_color_cf_request,
     timeline_arrayformula,
     week_num_label,
     weekend_cf_request,
@@ -196,6 +199,69 @@ def test_wrap_strategy_request_sets_overflow_cell_on_timeline():
 
 
 # ---------- weekend CF + boundary borders ----------
+
+def test_default_team_color_cf_matches_blank_team_cells():
+    """Fallback CF rule fires on rows where team is blank or empty-string
+    AND both Start (F) and End (G) are populated AND the cell's day is
+    in range. Per-team rules and the weekend rule must be added LATER so
+    they take precedence (each addConditionalFormatRule inserts at index 0)."""
+    req = default_team_color_cf_request(sheet_id=42, timeline_cols=5)
+    rule = req["addConditionalFormatRule"]["rule"]
+    rng = rule["ranges"][0]
+    assert rng["sheetId"] == 42
+    assert rng["startRowIndex"] == HEADER_ROWS
+    assert rng["startColumnIndex"] == 13
+    assert rng["endColumnIndex"] == 18
+
+    formula = rule["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    # Must check both ISBLANK and ="" — gspread USER_ENTERED of "" writes
+    # an empty string, which is NOT ISBLANK.
+    assert "ISBLANK($E" in formula
+    assert '$E5=""' in formula
+    # Still requires both Start AND End populated, like the per-team rule.
+    assert "ISBLANK($F5)" in formula
+    assert "ISBLANK($G5)" in formula
+    # Day-in-range comparison.
+    assert ">=$F5" in formula
+    assert "<=$G5" in formula
+
+    # Default color (light pastel blue) — visible but distinct from any
+    # team palette entry.
+    color = rule["booleanRule"]["format"]["backgroundColor"]
+    assert 0 <= color["red"] <= 1
+    assert 0 <= color["green"] <= 1
+    assert 0 <= color["blue"] <= 1
+
+
+def test_default_team_color_is_distinct_from_weekend_grey():
+    """The default-team color shouldn't visually collide with the weekend
+    grey shading — otherwise users can't tell at a glance whether a cell
+    is a weekend or a teamless bar."""
+    expected = hex_to_rgb01(DEFAULT_TEAM_COLOR)
+    # Weekend uses ~0.93 grey-on-grey-on-grey.
+    is_grey = (
+        abs(expected["red"] - expected["green"]) < 0.02
+        and abs(expected["green"] - expected["blue"]) < 0.02
+        and expected["red"] > 0.85
+    )
+    assert not is_grey, (
+        f"DEFAULT_TEAM_COLOR={DEFAULT_TEAM_COLOR} resolves to a near-grey "
+        f"that would clash with weekend shading"
+    )
+
+
+def test_default_team_color_accepts_custom_hex_override():
+    """Future-proofing: callers can override the default by passing a
+    different hex_color, e.g. from a _Config-driven palette entry."""
+    req = default_team_color_cf_request(
+        sheet_id=42, hex_color="#FF5733", timeline_cols=5,
+    )
+    color = req["addConditionalFormatRule"]["rule"]["booleanRule"]["format"]["backgroundColor"]
+    expected = hex_to_rgb01("#FF5733")
+    assert color["red"] == expected["red"]
+    assert color["green"] == expected["green"]
+    assert color["blue"] == expected["blue"]
+
 
 def test_weekend_cf_excludes_quarter_and_month_header_rows():
     # Weekend shading must NOT apply to rows 1-2 (Q/M merges) — otherwise a

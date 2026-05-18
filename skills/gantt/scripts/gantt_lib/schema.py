@@ -59,6 +59,11 @@ STATUS_VALUES = Status.all()
 WEEKEND_BG = {"red": 0.93, "green": 0.93, "blue": 0.93}     # subtle light grey
 MONTH_BORDER_COLOR = {"red": 0.75, "green": 0.75, "blue": 0.75}    # lighter grey
 QUARTER_BORDER_COLOR = {"red": 0.40, "green": 0.40, "blue": 0.40}  # darker grey
+# Default team color: applied to timeline bars on rows whose team cell
+# is blank. Low-saturation pastel blue — visible enough to read as "this
+# task has a scheduled bar" but distinct from any team palette entry so
+# the user can tell at a glance that the row is unassigned.
+DEFAULT_TEAM_COLOR = "#CFE2F3"
 
 
 def program_tab_name(name: str) -> str:
@@ -259,6 +264,61 @@ def team_color_cf_request(
     cell_day = f"{n_letter}${DAY_HEADER_ROW}"
     formula = (
         f'=AND(${COL_TEAM_LETTER}{anchor_row}="{team_name}",'
+        f'NOT(ISBLANK($F{anchor_row})),'
+        f'NOT(ISBLANK($G{anchor_row})),'
+        f'{cell_day}>=$F{anchor_row},'
+        f'{cell_day}<=$G{anchor_row})'
+    )
+    return {
+        "addConditionalFormatRule": {
+            "rule": {
+                "ranges": [{
+                    "sheetId": sheet_id,
+                    "startRowIndex": HEADER_ROWS,
+                    "endRowIndex": _max_data_row(),
+                    "startColumnIndex": TIMELINE_FIRST_COL_IDX,
+                    "endColumnIndex": TIMELINE_FIRST_COL_IDX + timeline_cols,
+                }],
+                "booleanRule": {
+                    "condition": {
+                        "type": "CUSTOM_FORMULA",
+                        "values": [{"userEnteredValue": formula}],
+                    },
+                    "format": {"backgroundColor": hex_to_rgb01(hex_color)},
+                },
+            },
+            "index": 0,
+        }
+    }
+
+
+def default_team_color_cf_request(
+    sheet_id: int,
+    hex_color: str = DEFAULT_TEAM_COLOR,
+    timeline_cols: int = TIMELINE_DAYS,
+) -> dict:
+    """Conditional formatting: paint timeline cells where the data row's
+    team is BLANK (no team assigned) and the cell's day falls within
+    [Start, End].
+
+    This is the fallback rule applied alongside per-team rules so that
+    tasks without a team — including everything pulled from Linear,
+    which doesn't carry a per-issue team field — still render with bars
+    on the timeline. Per-team rules should be inserted at higher
+    priority (i.e. added LATER) so a team assignment overrides the
+    default color.
+
+    The formula handles both truly-empty cells (ISBLANK) and cells
+    holding an empty string (gspread USER_ENTERED of "" lands as "",
+    not blank).
+    """
+    n_letter = col_letter(TIMELINE_FIRST_COL_IDX + 1)  # "N"
+    anchor_row = FIRST_TASK_ROW
+    cell_day = f"{n_letter}${DAY_HEADER_ROW}"
+    formula = (
+        f'=AND('
+        f'OR(ISBLANK(${COL_TEAM_LETTER}{anchor_row}),'
+        f'${COL_TEAM_LETTER}{anchor_row}=""),'
         f'NOT(ISBLANK($F{anchor_row})),'
         f'NOT(ISBLANK($G{anchor_row})),'
         f'{cell_day}>=$F{anchor_row},'
