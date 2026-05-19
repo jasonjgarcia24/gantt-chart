@@ -128,7 +128,7 @@ WEEKEND_BG = {"red": 0.93, "green": 0.93, "blue": 0.93}     # subtle light grey
 WORKBOOK_ONLY_GREY = {"red": 0.88, "green": 0.88, "blue": 0.88}
 # Distinctly darker than WORKBOOK_ONLY_GREY so milestone-row "doesn't
 # apply" cells read as a stronger signal than the linked-row hint.
-MILESTONE_ROW_GREY = {"red": 0.75, "green": 0.75, "blue": 0.75}
+MILESTONE_ROW_GREY = {"red": 0.6, "green": 0.6, "blue": 0.6}
 MONTH_BORDER_COLOR = {"red": 0.75, "green": 0.75, "blue": 0.75}    # lighter grey
 QUARTER_BORDER_COLOR = {"red": 0.40, "green": 0.40, "blue": 0.40}  # darker grey
 # Default team color: applied to timeline bars on rows whose team cell
