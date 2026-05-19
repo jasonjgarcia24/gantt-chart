@@ -11,6 +11,7 @@ import pytest
 from gantt_lib import schema
 from gantt_lib.sheets import (
     apply_grey_out_cf,
+    apply_milestone_row_grey_out_cf,
     migrate_program_tab_v1_to_v2,
 )
 from tests.fixtures.fake_workbook import FakeSpreadsheet, FakeWorksheet
@@ -169,3 +170,45 @@ def test_apply_grey_out_cf_raises_on_missing_program():
     ss = FakeSpreadsheet()
     with pytest.raises(schema.ProgramTabSchemaError, match="not found"):
         apply_grey_out_cf(ss, "NOPE")
+
+
+# --- apply_milestone_row_grey_out_cf ----------------------------------------
+
+
+def test_apply_milestone_row_grey_out_cf_emits_addConditionalFormatRule_batch():
+    """Patch path: a v2 tab gets one addConditionalFormatRule request
+    targeting Duration/%Complete/Milestone Link, triggered by Milestone? = TRUE."""
+    ss = FakeSpreadsheet()
+    _seed_v2_tab(ss)
+    apply_milestone_row_grey_out_cf(ss, "TPM90")
+
+    cf_bodies = [
+        b for b in ss.batch_updates
+        if any("addConditionalFormatRule" in req for req in b.get("requests", []))
+    ]
+    assert len(cf_bodies) == 1
+    rule = cf_bodies[0]["requests"][0]["addConditionalFormatRule"]["rule"]
+    col_starts = sorted(r["startColumnIndex"] for r in rule["ranges"])
+    assert col_starts == sorted([
+        schema.COL_DURATION_IDX,
+        schema.COL_PERCENT_IDX,
+        schema.COL_MILESTONE_LINK_IDX,
+    ])
+    # Trigger references col L (Milestone?).
+    formula = rule["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    assert "$L" in formula and "TRUE" in formula
+
+
+def test_apply_milestone_row_grey_out_cf_raises_on_v1_tab():
+    """Milestone Link column only exists on v2 — the formula would target
+    a non-existent col on v1 tabs. Force caller to migrate first."""
+    ss = FakeSpreadsheet()
+    _seed_v1_tab(ss)
+    with pytest.raises(schema.ProgramTabSchemaError, match="migrate-schema"):
+        apply_milestone_row_grey_out_cf(ss, "TPM90")
+
+
+def test_apply_milestone_row_grey_out_cf_raises_on_missing_program():
+    ss = FakeSpreadsheet()
+    with pytest.raises(schema.ProgramTabSchemaError, match="not found"):
+        apply_milestone_row_grey_out_cf(ss, "NOPE")

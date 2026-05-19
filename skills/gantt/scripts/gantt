@@ -444,15 +444,16 @@ def cmd_program_new(args: argparse.Namespace) -> int:
                     end_col_idx_exclusive=schema.TIMELINE_FIRST_COL_IDX + end_idx + 1,
                 ))
 
-    # CF rules: weekend (top priority, last added) > linked-row grey-out
-    # (workbook-only field hint) > per-team colors > default-team color
-    # (fallback for blank-team rows). Each rule is added at index 0, so
-    # insertion order = reverse of evaluation priority. Default goes
-    # first (lowest priority).
+    # CF rules: weekend (top priority, last added) > milestone-row
+    # grey-out > linked-row grey-out (workbook-only field hint) >
+    # per-team colors > default-team color (fallback for blank-team rows).
+    # Each rule is added at index 0, so insertion order = reverse of
+    # evaluation priority. Default goes first (lowest priority).
     requests.append(schema.default_team_color_cf_request(ws.id))
     for team_name, hex_color in palette:
         requests.append(schema.team_color_cf_request(ws.id, team_name, hex_color))
     requests.append(schema.linked_workbook_only_grey_out_cf_request(ws.id))
+    requests.append(schema.milestone_row_grey_out_cf_request(ws.id))
     requests.append(schema.weekend_cf_request(ws.id))
 
     # Outline each merged Q/M column range with full-vertical left+right
@@ -499,6 +500,22 @@ def cmd_program_patch_greyout_cf(args: argparse.Namespace) -> int:
         die(str(e))
 
     ok(f"program {args.name} patch-greyout-cf — grey-out CF rule added")
+    return 0
+
+
+def cmd_program_patch_milestone_greyout_cf(args: argparse.Namespace) -> int:
+    """Retro-patch the milestone-row grey-out CF rule onto an existing
+    program tab. Greys Duration / % Complete / Milestone Link on rows
+    where Milestone? is checked."""
+    from gantt_lib import schema, sheets
+
+    ss = _open_workbook()
+    try:
+        sheets.apply_milestone_row_grey_out_cf(ss, args.name)
+    except schema.ProgramTabSchemaError as e:
+        die(str(e))
+
+    ok(f"program {args.name} patch-milestone-greyout-cf — milestone-row CF rule added")
     return 0
 
 
@@ -1172,6 +1189,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pgo.add_argument("name", help="program short name (the P_<name> tab to patch)")
     p_pgo.set_defaults(func=cmd_program_patch_greyout_cf)
+
+    p_pmgo = p_program_sub.add_parser(
+        "patch-milestone-greyout-cf",
+        help="retro-patch the milestone-row grey-out CF rule onto an existing tab",
+    )
+    p_pmgo.add_argument("name", help="program short name (the P_<name> tab to patch)")
+    p_pmgo.set_defaults(func=cmd_program_patch_milestone_greyout_cf)
 
     # ---------- task add / update / delete ----------
 

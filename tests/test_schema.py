@@ -10,6 +10,8 @@ from datetime import date
 import pytest
 
 from gantt_lib.schema import (
+    COL_DURATION_IDX,
+    COL_MILESTONE_LINK_IDX,
     COL_NOTES_IDX,
     COL_PERCENT_IDX,
     COL_TEAM_IDX,
@@ -35,6 +37,7 @@ from gantt_lib.schema import (
     hex_to_rgb01,
     linked_workbook_only_grey_out_cf_request,
     make_timeline_days,
+    milestone_row_grey_out_cf_request,
     month_label,
     program_tab_name,
     quarter_label,
@@ -382,6 +385,50 @@ def test_linked_workbook_only_grey_out_cf_accepts_extra_columns():
     assert COL_TEAM_IDX in col_starts
     assert COL_PERCENT_IDX in col_starts
     assert COL_NOTES_IDX in col_starts
+
+
+# ---------- milestone-row grey-out CF ----------
+
+
+def test_milestone_row_grey_out_cf_targets_duration_percent_milestone_link():
+    """Greys out fields that don't apply to milestone rows: Duration (H),
+    % Complete (I), Milestone Link (M)."""
+    req = milestone_row_grey_out_cf_request(sheet_id=42)
+    rule = req["addConditionalFormatRule"]["rule"]
+    col_starts = sorted(r["startColumnIndex"] for r in rule["ranges"])
+    assert col_starts == sorted([COL_DURATION_IDX, COL_PERCENT_IDX, COL_MILESTONE_LINK_IDX])
+    for r in rule["ranges"]:
+        assert r["sheetId"] == 42
+        assert r["startRowIndex"] == HEADER_ROWS  # task region only
+        assert r["endColumnIndex"] == r["startColumnIndex"] + 1
+
+
+def test_milestone_row_grey_out_cf_triggers_on_milestone_checkbox():
+    """The CF formula checks the Milestone? column (col L) for TRUE."""
+    req = milestone_row_grey_out_cf_request(sheet_id=42)
+    formula = req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    # col L = the Milestone? checkbox column.
+    assert f"$L{FIRST_TASK_ROW}=TRUE" in formula
+
+
+def test_milestone_row_grey_out_cf_uses_workbook_only_grey():
+    """Same shade as the linked-row grey-out, since both signal 'this
+    field doesn't apply / won't sync — probably don't edit'."""
+    req = milestone_row_grey_out_cf_request(sheet_id=42)
+    color = req["addConditionalFormatRule"]["rule"]["booleanRule"]["format"]["backgroundColor"]
+    assert color == WORKBOOK_ONLY_GREY
+
+
+def test_milestone_row_grey_out_cf_accepts_extra_columns():
+    """extra_col_idxs lets callers add columns (e.g. Predecessors) for
+    program-specific conventions about what doesn't apply to milestones."""
+    from gantt_lib.schema import COL_STATUS_IDX
+    req = milestone_row_grey_out_cf_request(
+        sheet_id=42, extra_col_idxs=(COL_STATUS_IDX,),
+    )
+    col_starts = sorted(r["startColumnIndex"] for r in req["addConditionalFormatRule"]["rule"]["ranges"])
+    assert COL_STATUS_IDX in col_starts
+    assert COL_DURATION_IDX in col_starts
 
 
 def test_boundary_border_request_spans_full_vertical():

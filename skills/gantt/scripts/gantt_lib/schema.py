@@ -104,6 +104,7 @@ COL_MILESTONE_LETTER = "L"
 # Sheets API uses 0-based indices in batch_update payloads.
 COL_NAME_IDX = 2
 COL_TEAM_IDX = 4
+COL_DURATION_IDX = 7
 COL_PERCENT_IDX = 8
 COL_STATUS_IDX = 9
 COL_MILESTONE_IDX = 11
@@ -441,6 +442,61 @@ def weekend_cf_request(sheet_id: int, timeline_cols: int = TIMELINE_DAYS) -> dic
                         "values": [{"userEnteredValue": formula}],
                     },
                     "format": {"backgroundColor": WEEKEND_BG},
+                },
+            },
+            "index": 0,
+        }
+    }
+
+
+def milestone_row_grey_out_cf_request(
+    sheet_id: int,
+    extra_col_idxs: tuple[int, ...] = (),
+) -> dict:
+    """Conditional formatting: grey out fields that don't apply to
+    milestone rows.
+
+    A milestone is a zero-duration marker. On rows where `Milestone?`
+    (col L) is checked, the following fields are meaningless and
+    shouldn't be edited:
+
+      - `Duration` (col H): always zero by definition
+      - `% Complete` (col I): binary (milestone is hit or not)
+      - `Milestone Link` (col M): a milestone shouldn't link to itself or
+        another milestone (Linear's milestones don't nest)
+
+    `extra_col_idxs` lets callers extend the greyed-out set (e.g. add
+    Predecessors on a per-program basis if the convention there is that
+    milestones don't carry predecessors).
+    """
+    cols = (
+        COL_DURATION_IDX,
+        COL_PERCENT_IDX,
+        COL_MILESTONE_LINK_IDX,
+        *extra_col_idxs,
+    )
+    # Sheets stores the checkbox as the boolean TRUE; `=$L5=TRUE` matches.
+    formula = f"=${col_letter(COL_MILESTONE_IDX + 1)}{FIRST_TASK_ROW}=TRUE"
+    ranges = [
+        {
+            "sheetId": sheet_id,
+            "startRowIndex": HEADER_ROWS,
+            "endRowIndex": _max_data_row(),
+            "startColumnIndex": col_idx,
+            "endColumnIndex": col_idx + 1,
+        }
+        for col_idx in cols
+    ]
+    return {
+        "addConditionalFormatRule": {
+            "rule": {
+                "ranges": ranges,
+                "booleanRule": {
+                    "condition": {
+                        "type": "CUSTOM_FORMULA",
+                        "values": [{"userEnteredValue": formula}],
+                    },
+                    "format": {"backgroundColor": WORKBOOK_ONLY_GREY},
                 },
             },
             "index": 0,
