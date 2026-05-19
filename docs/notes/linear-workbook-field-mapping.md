@@ -2,7 +2,7 @@
 
 Inventory of every field on both sides of the sync, what's currently wired, and where the gaps are.
 
-Last updated: 2026-05-18 (PR3: Team ↔ Linear labels bidirectional via `linear_team_label_map`).
+Last updated: 2026-05-18 (PR4: Predecessor DSL pull-augment preserves workbook lags/SS/SF).
 
 Companion docs:
 - `linear-mcp-shapes.md` — read-side MCP payload shapes
@@ -131,7 +131,7 @@ Captured across `tests/fixtures/linear_mcp/save_issue_*.json` and `linear/snapsh
 | `End` ↔ `dueDate` | **Now fully bidirectional (2026-05-18)**. User directive: keep it simple, treat them as the same field. Empty/clear on either side propagates. Workbook cascade still runs locally between syncs; on next sync, computed End re-establishes via PUSH if Linear hasn't moved it. |
 | `Milestone?` ↔ `milestone` | Lossy: workbook `bool` can't encode Linear milestone obj (title/progress/dates). Phase 2.1 adds milestone-id sidecar. |
 | `Start` ↔ `startedAt` | Different semantics: workbook cascade-projected vs. Linear actual transition timestamp. Not directly mappable. |
-| `Predecessors` (DSL) ↔ `blockedBy` | **Partial**: only FS+0 round-trips. Lags (`+3`), SS/SF, and parent-level predecessors drop on push. |
+| `Predecessors` (DSL) ↔ `blockedBy` | **Asymmetric (PR4)**: push is lossy (DSL → flat blockedBy drops lags + SS/SF). Pull is *append-only* — Linear blockers not yet in the workbook DSL get added as bare `<wbs>FS` entries; existing lags/SS/SF are preserved; Linear-side removals are ignored. The workbook owns the rich relations layer. |
 
 ### Asymmetric flows (one-way by design)
 

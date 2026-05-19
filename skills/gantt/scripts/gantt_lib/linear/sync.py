@@ -227,12 +227,14 @@ def _apply_pull_writes(
     diff: SyncDiff,
     payload: CpInput,
     workbook_tasks: list[Task],
+    existing_links: list[SyncLink],
 ) -> None:
     """Apply pull-direction changes to the program tab. For each
     pull-relevant row, update or append the workbook Task. sync_tab
     refresh is handled separately by `_compute_post_sync_links`."""
     task_by_wbs = {t.id: t for t in workbook_tasks}
     issue_by_linear = {iss.linear_id: iss for iss in payload.issues}
+    wbs_by_linear: dict[str, str] = {l.linear_id: l.wbs_id for l in existing_links}
 
     # 1) Updates: per-field PULL or CONFLICT-linear-wins writes.
     for row in diff.rows:
@@ -249,6 +251,13 @@ def _apply_pull_writes(
             if not apply_to_workbook:
                 continue
             _apply_field_to_task(task, fc.field, fc.resolved_to_value)
+
+        # blockedby: augment workbook predecessors with any new Linear
+        # blockers, never overwrite. Preserves user-managed DSL richness
+        # (lags, SS/SF, parent-refs) while still picking up newly-added
+        # Linear blockers on the next sync.
+        _augment_predecessors_from_linear(task, row.field_changes, wbs_by_linear)
+
         # Write the updated row back to the sheet.
         row_idx = sheets.find_task_row(program_ws, row.wbs_id)
         if row_idx is not None:
@@ -318,9 +327,78 @@ def _apply_field_to_task(task: Task, field_name: str, value: Any) -> None:
             pass
     elif field_name == "team":
         task.team = str(value or "")
-    # blockedby, parent: skip — these require cross-row translation and
-    # are workbook-wins fields anyway, so PULL/Linear-wins shouldn't
-    # produce them often. Future enhancement if needed.
+    # blockedby: handled by `_augment_predecessors_from_linear` outside
+    # this function (needs link-table context). parent: skip — would
+    # require WBS-hierarchy restructuring on pull, out of scope.
+
+
+def _augment_predecessors_from_linear(
+    task: Task,
+    field_changes: list[FieldChange],
+    wbs_by_linear: dict[str, str],
+) -> None:
+    """If Linear's current blockedby includes blockers not represented in
+    the workbook task's predecessor DSL, append them as bare `FS+0`
+    entries — preserving any lags / SS / SF relations the user wrote in
+    the workbook.
+
+    Behavior:
+    - Augment only on PULL or CONFLICT (workbook-wins) classifications
+    - Always APPEND, never remove — Linear-side removals are ignored on
+      pull to protect user-managed DSL
+    - New entries default to Finish-to-Start with zero lag (the lossy
+      subset Linear's blockedBy can carry); user can edit them later
+
+    Translates Linear ids → WBS ids via `wbs_by_linear`. Unresolvable
+    Linear ids (e.g. issues not yet linked to a workbook row) are
+    silently skipped — they'll surface on a future sync once linked.
+    """
+    from gantt_lib.dsl import (
+        Predecessor,
+        format_predecessors,
+        parse_predecessors,
+    )
+
+    fc = next((c for c in field_changes if c.field == "blockedby"), None)
+    if fc is None:
+        return
+    if fc.classification not in (FieldClassification.PULL, FieldClassification.CONFLICT):
+        return
+    if fc.classification == FieldClassification.CONFLICT and fc.resolved_to_source != "workbook":
+        # Linear-wins conflict already handled by _apply_field_to_task — but
+        # blockedby never goes that way today (it's WORKBOOK_WINS). Defensive.
+        return
+
+    linear_str = fc.linear_value or ""
+    linear_set = {t.strip() for t in str(linear_str).split(",") if t.strip()}
+    if not linear_set:
+        return
+
+    # Translate Linear ids → WBS ids; drop unresolvable ones.
+    new_wbs_ids: list[str] = []
+    for lid in linear_set:
+        wbs = wbs_by_linear.get(lid)
+        if wbs:
+            new_wbs_ids.append(wbs)
+
+    if not new_wbs_ids:
+        return
+
+    try:
+        current_preds = parse_predecessors(task.predecessors or "")
+    except Exception:
+        current_preds = []
+    have = {p.id for p in current_preds}
+
+    additions = [
+        Predecessor(id=wbs, rel="FS", lag=0)
+        for wbs in new_wbs_ids
+        if wbs not in have
+    ]
+    if not additions:
+        return
+
+    task.predecessors = format_predecessors(current_preds + additions)
 
 
 # ----- Post-sync sync_tab links ----------------------------------------------
@@ -577,6 +655,7 @@ def sync(
                 diff=diff,
                 payload=payload,
                 workbook_tasks=workbook_tasks,
+                existing_links=existing_links,
             )
 
         # 7. Optimistic sync_tab refresh (skips `create` rows).

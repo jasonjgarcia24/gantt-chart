@@ -20,9 +20,11 @@ from gantt_lib.cp.contracts import (
     CpInputIssue,
     CpInputProject,
 )
+from gantt_lib.linear.merge import FieldChange, FieldClassification
 from gantt_lib.linear.sync import (
     ProgramTabMissingError,
     SyncResult,
+    _augment_predecessors_from_linear,
     sync,
 )
 from gantt_lib.linear.sync_tab import (
@@ -295,3 +297,122 @@ def test_force_drops_existing_links_and_treats_linear_issues_as_new():
     assert result.summary["pull_new"] == 1
     # Old wbs=1 has no Linear link anymore → action=create on push side.
     assert result.summary["created"] == 1
+
+
+# --- _augment_predecessors_from_linear --------------------------------------
+
+
+def _fc_blockedby(W: str, S: str, L: str, classification: FieldClassification, source: str = "n/a") -> FieldChange:
+    resolved = W if source == "workbook" else L if source == "linear" else W
+    return FieldChange(
+        field="blockedby",
+        workbook_value=W,
+        snapshot_value=S,
+        linear_value=L,
+        classification=classification,
+        resolved_to_value=resolved,
+        resolved_to_source=source,
+    )
+
+
+def test_augment_appends_new_linear_blocker_as_bare_fs():
+    """Linear has JAS-7 blocking us; workbook has no predecessors.
+    Augment appends "<wbs>FS" for the corresponding workbook row."""
+    task = Task(id="3", level=1, name="x", duration=2, predecessors="")
+    fc = _fc_blockedby(W="", S="", L="JAS-7", classification=FieldClassification.PULL, source="linear")
+    _augment_predecessors_from_linear(task, [fc], wbs_by_linear={"JAS-7": "2"})
+    assert task.predecessors == "2FS"
+
+
+def test_augment_preserves_existing_lags_and_appends_new_blockers():
+    """Workbook DSL has '1FS+3' (a 3-day lag) and Linear adds JAS-7.
+    Augment keeps the lag intact and adds 2FS at the end."""
+    task = Task(id="3", level=1, name="x", duration=2, predecessors="1FS+3, 4SS")
+    fc = _fc_blockedby(
+        W="JAS-1,JAS-4", S="JAS-1,JAS-4",
+        L="JAS-1,JAS-4,JAS-7",
+        classification=FieldClassification.PULL,
+        source="linear",
+    )
+    _augment_predecessors_from_linear(
+        task, [fc],
+        wbs_by_linear={"JAS-1": "1", "JAS-4": "4", "JAS-7": "2"},
+    )
+    # Existing entries preserved verbatim; new blocker appended as bare FS.
+    assert "1FS+3" in task.predecessors
+    assert "4SS" in task.predecessors
+    assert task.predecessors.endswith("2FS")
+
+
+def test_augment_does_not_remove_workbook_predecessors_linear_dropped():
+    """Linear removed JAS-1 (it's no longer in current blockedby), but
+    the workbook still references it via DSL. Augmentation must NOT
+    remove the workbook's entry — it's append-only."""
+    task = Task(id="3", level=1, name="x", duration=2, predecessors="1FS, 4SS+2")
+    fc = _fc_blockedby(
+        W="JAS-1,JAS-4", S="JAS-1,JAS-4",
+        L="JAS-4",  # JAS-1 gone
+        classification=FieldClassification.PULL,
+        source="linear",
+    )
+    _augment_predecessors_from_linear(
+        task, [fc],
+        wbs_by_linear={"JAS-1": "1", "JAS-4": "4"},
+    )
+    # No removals; both entries survive.
+    assert task.predecessors == "1FS, 4SS+2"
+
+
+def test_augment_skips_blockers_already_in_dsl_regardless_of_relation():
+    """If wbs '1' is already in DSL with SS relation, don't double-add
+    even though Linear's blockedby implies FS+0."""
+    task = Task(id="3", level=1, name="x", duration=2, predecessors="1SS")
+    fc = _fc_blockedby(
+        W="JAS-1", S="", L="JAS-1",
+        classification=FieldClassification.PULL,
+        source="linear",
+    )
+    _augment_predecessors_from_linear(
+        task, [fc],
+        wbs_by_linear={"JAS-1": "1"},
+    )
+    assert task.predecessors == "1SS"  # unchanged
+
+
+def test_augment_skips_unresolvable_linear_ids():
+    """Linear blocker references an issue not yet linked to a workbook
+    row → silently skip (next sync after the linked-row appears will
+    pick it up)."""
+    task = Task(id="3", level=1, name="x", duration=2, predecessors="")
+    fc = _fc_blockedby(W="", S="", L="JAS-99,JAS-7",
+                       classification=FieldClassification.PULL, source="linear")
+    _augment_predecessors_from_linear(
+        task, [fc],
+        wbs_by_linear={"JAS-7": "2"},  # JAS-99 not in map
+    )
+    assert task.predecessors == "2FS"
+
+
+def test_augment_noop_on_push_classification():
+    """PUSH = workbook changed since snapshot. Workbook is authoritative;
+    no augmentation needed (and would be redundant — the workbook is
+    about to push its richer view to Linear)."""
+    task = Task(id="3", level=1, name="x", duration=2, predecessors="1FS+3")
+    fc = _fc_blockedby(W="JAS-1", S="", L="",
+                       classification=FieldClassification.PUSH, source="workbook")
+    _augment_predecessors_from_linear(
+        task, [fc],
+        wbs_by_linear={"JAS-1": "1"},
+    )
+    assert task.predecessors == "1FS+3"  # unchanged
+
+
+def test_augment_noop_when_no_blockedby_field_change():
+    task = Task(id="3", level=1, name="x", duration=2, predecessors="1FS")
+    title_fc = FieldChange(
+        field="title", workbook_value="X", snapshot_value="X", linear_value="Y",
+        classification=FieldClassification.PULL,
+        resolved_to_value="Y", resolved_to_source="linear",
+    )
+    _augment_predecessors_from_linear(task, [title_fc], wbs_by_linear={})
+    assert task.predecessors == "1FS"
