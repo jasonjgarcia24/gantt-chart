@@ -54,6 +54,13 @@ class CpInputConfig:
     # teams round-trip into Linear (Linear has no per-issue team field
     # at the granularity workbook needs). Empty map = team sync disabled.
     linear_team_label_map: dict = field(default_factory=dict)
+    # Workspace users from `list_users`. Used to pre-validate workbook
+    # Owner values before pushing assignee — Linear silently no-ops if
+    # the assignee string doesn't resolve to a real user (the SILENT-NO-OP
+    # quirk), so the push code skips the field entirely when there's no
+    # match. Each dict: {"id", "email", "name", "displayName"}.
+    # Empty list = assignee validation disabled (best-effort name match).
+    linear_users: list = field(default_factory=list)
 
 
 @dataclass
@@ -189,6 +196,7 @@ def from_json(s: str) -> CpInput:
         linear_project=config_raw.get("linear_project", "") or "",
         linear_archive_state=config_raw.get("linear_archive_state", "") or "",
         linear_team_label_map=dict(config_raw.get("linear_team_label_map") or {}),
+        linear_users=list(config_raw.get("linear_users") or []),
     )
 
     issues_raw = raw.get("issues", []) or []

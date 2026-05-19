@@ -962,3 +962,133 @@ def test_state_push_at_risk_with_no_start_defaults_to_backlog():
     reqs = _push_with_task("At Risk", task_start=None)
     assert reqs[0].kwargs["state"] == "Backlog"
 
+
+# --- assignee pre-validation (PR-G) -----------------------------------------
+
+
+from gantt_lib.linear.push import _resolve_assignee  # noqa: E402
+
+
+_USERS = [
+    {"id": "u-1", "email": "alex@example.com",
+     "name": "Alex Lee", "displayName": "alex.lee"},
+    {"id": "u-2", "email": "jane@example.com",
+     "name": "Jane Park", "displayName": "jane.park"},
+]
+
+
+def test_resolve_assignee_matches_by_email_case_insensitive():
+    assert _resolve_assignee("alex@example.com", _USERS) == "alex@example.com"
+    assert _resolve_assignee("ALEX@example.com", _USERS) == "alex@example.com"
+
+
+def test_resolve_assignee_matches_by_display_name():
+    assert _resolve_assignee("alex.lee", _USERS) == "alex@example.com"
+
+
+def test_resolve_assignee_matches_by_full_name():
+    assert _resolve_assignee("Alex Lee", _USERS) == "alex@example.com"
+    assert _resolve_assignee("jane park", _USERS) == "jane@example.com"
+
+
+def test_resolve_assignee_returns_none_for_first_name_only():
+    """First names alone don't disambiguate — Linear has the full name,
+    not 'Alex'. Returns None so the push code can skip the field."""
+    assert _resolve_assignee("Alex", _USERS) is None
+    assert _resolve_assignee("Jon", _USERS) is None
+
+
+def test_resolve_assignee_returns_none_for_empty_input():
+    assert _resolve_assignee("", _USERS) is None
+    assert _resolve_assignee("   ", _USERS) is None
+
+
+def test_resolve_assignee_returns_none_when_users_list_empty():
+    """Empty user list = validation disabled at caller level — but the
+    resolver itself still returns None (no matches possible)."""
+    assert _resolve_assignee("alex@example.com", []) is None
+
+
+def _assignee_push_row(workbook_owner: str) -> SyncRowDiff:
+    return _mk_update_row(
+        field_changes=[
+            _fc("assignee", workbook_owner, "", "",
+                FieldClassification.PUSH, workbook_owner, "workbook"),
+        ],
+    )
+
+
+def _push_with_assignee_validation(workbook_owner: str, users: list[dict]):
+    unresolved: list[dict] = []
+    row = _assignee_push_row(workbook_owner)
+    diff = SyncDiff(program="TEST", rows=[row])
+    reqs = build_push_requests(
+        diff,
+        workbook_tasks_by_wbs={},
+        linear_team="T", linear_project="P", linear_archive_state="Canceled",
+        linear_users=users,
+        unresolved_owners=unresolved,
+    )
+    return reqs, unresolved
+
+
+def test_assignee_push_resolved_value_translated_to_email():
+    """Workbook value 'Alex Lee' (full name) → push sends 'alex@example.com'
+    (the canonical email Linear can resolve unambiguously)."""
+    reqs, unresolved = _push_with_assignee_validation("Alex Lee", _USERS)
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "JAS-5", "assignee": "alex@example.com"}
+    assert unresolved == []
+
+
+def test_assignee_push_unresolved_skips_field_and_records():
+    """Workbook value 'Jon' doesn't match — push code skips the assignee
+    field entirely (better than silent no-op) and appends to the
+    unresolved sink for surfacing in the result line."""
+    reqs, unresolved = _push_with_assignee_validation("Jon", _USERS)
+    # No save_issue emitted — the field was the only change and it was skipped.
+    assert reqs == []
+    assert len(unresolved) == 1
+    assert unresolved[0]["workbook_value"] == "Jon"
+    assert unresolved[0]["field"] == "assignee"
+    assert unresolved[0]["wbs_id"] == "1"
+    assert "no matching" in unresolved[0]["reason"]
+
+
+def test_assignee_push_unresolved_does_not_block_other_fields():
+    """Other field pushes on the same row still go through; only assignee
+    is dropped. Confirms the validation is per-field, not per-row."""
+    row = _mk_update_row(field_changes=[
+        _fc("assignee", "Jon", "", "",
+            FieldClassification.PUSH, "Jon", "workbook"),
+        _fc("title", "New title", "Old", "Old",
+            FieldClassification.PUSH, "New title", "workbook"),
+    ])
+    unresolved: list[dict] = []
+    reqs = build_push_requests(
+        SyncDiff(program="TEST", rows=[row]),
+        workbook_tasks_by_wbs={},
+        linear_team="T", linear_project="P", linear_archive_state="Canceled",
+        linear_users=_USERS,
+        unresolved_owners=unresolved,
+    )
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "JAS-5", "title": "New title"}
+    assert len(unresolved) == 1
+
+
+def test_assignee_validation_disabled_when_linear_users_omitted():
+    """Backward compat: callers that don't pass linear_users get the
+    legacy behavior — raw value flows through to save_issue. Unresolved
+    sink stays empty."""
+    unresolved: list[dict] = []
+    reqs = build_push_requests(
+        SyncDiff(program="TEST", rows=[_assignee_push_row("Jon")]),
+        workbook_tasks_by_wbs={},
+        linear_team="T", linear_project="P", linear_archive_state="Canceled",
+        unresolved_owners=unresolved,
+    )
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "JAS-5", "assignee": "Jon"}
+    assert unresolved == []
+

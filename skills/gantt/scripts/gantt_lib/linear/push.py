@@ -124,6 +124,42 @@ def _placeholder_for(wbs_id: str) -> str:
 # ----- Per-row request builders ----------------------------------------------
 
 
+def _resolve_assignee(
+    workbook_owner: str,
+    linear_users: list[dict],
+) -> Optional[str]:
+    """Resolve a workbook Owner value to something Linear can match
+    deterministically. Tries (in order): exact email match, exact
+    displayName, exact full name. Returns the matched email (which
+    `save_issue.assignee` resolves cleanly), or None if no match.
+
+    Why this exists: Linear's `save_issue.assignee` accepts "User ID,
+    name, email, or 'me'" but silently no-ops invalid values instead of
+    erroring. Pre-validating against `list_users` lets the push code
+    skip the field entirely rather than send a value Linear will reject.
+
+    `linear_users` is a list of dicts: {"id", "email", "name", "displayName"}.
+    Empty list disables validation (caller's choice — push the raw value
+    and accept silent no-ops if any).
+    """
+    if not workbook_owner or not linear_users:
+        return None
+    needle = workbook_owner.strip()
+    if not needle:
+        return None
+    needle_lower = needle.lower()
+    # Pass 1: exact email match (most reliable).
+    for u in linear_users:
+        if (u.get("email") or "").strip().lower() == needle_lower:
+            return u["email"]
+    # Pass 2: exact displayName (e.g. "jason.garcia24") or full name.
+    for u in linear_users:
+        for field_name in ("displayName", "name"):
+            if (u.get(field_name) or "").strip().lower() == needle_lower:
+                return u.get("email") or u.get("id")
+    return None
+
+
 def _compute_team_labels(
     workbook_team: str,
     current_labels: list[str],
@@ -152,6 +188,9 @@ def _push_field_kwargs(
     team_label_map: Optional[dict[str, str]] = None,
     task_start: Optional[Any] = None,
     today: Optional[Any] = None,
+    linear_users: Optional[list[dict]] = None,
+    unresolved_owner_sink: Optional[list] = None,
+    row_wbs_id: str = "",
 ) -> dict[str, Any]:
     """Translate the field_changes the workbook is asserting (PUSH or
     workbook-winning CONFLICT) into save_issue kwargs.
@@ -167,6 +206,13 @@ def _push_field_kwargs(
     `task_start` and `today` are needed only for the date-conditional
     "At Risk" state translation — pass None to default At Risk to
     Backlog (treating the task as not-yet-started).
+
+    `linear_users` enables pre-validation of the workbook Owner value
+    before pushing assignee. When provided and the value can't resolve
+    to a workspace user, the assignee field is skipped entirely (rather
+    than silently no-op'd by Linear) and the value is appended to
+    `unresolved_owner_sink` along with `row_wbs_id` for surfacing in
+    the sync result.
     """
     # Internal snapshot name → Linear MCP save_issue param name.
     field_to_mcp = {
@@ -247,6 +293,29 @@ def _push_field_kwargs(
                 task_start=task_start,
                 today=today,
             )
+        elif mcp_key == "assignee":
+            # Pre-validate against the workspace user list. Skip the
+            # field entirely (rather than send a value Linear will
+            # silently no-op) when no match. Workbook owner stays
+            # workbook-local for unresolved cases.
+            raw = str(value or "").strip()
+            if not raw:
+                continue
+            if linear_users is None:
+                # Validation disabled — push raw value (legacy behavior).
+                value = raw
+            else:
+                resolved = _resolve_assignee(raw, linear_users)
+                if resolved is None:
+                    if unresolved_owner_sink is not None:
+                        unresolved_owner_sink.append({
+                            "wbs_id": row_wbs_id,
+                            "field": "assignee",
+                            "workbook_value": raw,
+                            "reason": "no matching Linear workspace user",
+                        })
+                    continue
+                value = resolved
         else:
             value = value or ""
         kwargs[mcp_key] = value
@@ -303,11 +372,14 @@ def _build_update_request(
     team_label_map: Optional[dict[str, str]] = None,
     task_start: Optional[Any] = None,
     today: Optional[Any] = None,
+    linear_users: Optional[list[dict]] = None,
+    unresolved_owner_sink: Optional[list] = None,
 ) -> Optional[MCPRequest]:
     """Build the pass-1 save_issue request for an `update` row, or None
     if no field needs pushing (everything was PULL/CONVERGED/Linear-wins).
 
     `task_start` and `today` flow through to the At Risk state translation.
+    `linear_users` and `unresolved_owner_sink` enable assignee pre-validation.
     """
     kwargs = _push_field_kwargs(
         row.field_changes,
@@ -315,6 +387,9 @@ def _build_update_request(
         team_label_map=team_label_map,
         task_start=task_start,
         today=today,
+        linear_users=linear_users,
+        unresolved_owner_sink=unresolved_owner_sink,
+        row_wbs_id=row.wbs_id,
     )
     if not kwargs:
         return None
@@ -402,16 +477,35 @@ def _build_create_request(
     linear_team: str,
     linear_project: str,
     team_label_map: Optional[dict[str, str]] = None,
+    linear_users: Optional[list[dict]] = None,
+    unresolved_owner_sink: Optional[list] = None,
 ) -> MCPRequest:
     """Build the pass-1 save_issue create request. blockedBy intentionally
-    omitted — pass 2 reconciles it once new linear_ids are known."""
+    omitted — pass 2 reconciles it once new linear_ids are known.
+
+    `linear_users` enables assignee pre-validation on create (same as
+    update path) — workbook Owner is dropped from the request when it
+    can't resolve to a workspace user.
+    """
     kwargs: dict[str, Any] = {
         "team": linear_team,
         "project": linear_project,
         "title": task.name,
     }
     if task.owner:
-        kwargs["assignee"] = task.owner
+        if linear_users is None:
+            kwargs["assignee"] = task.owner
+        else:
+            resolved = _resolve_assignee(task.owner, linear_users)
+            if resolved is not None:
+                kwargs["assignee"] = resolved
+            elif unresolved_owner_sink is not None:
+                unresolved_owner_sink.append({
+                    "wbs_id": row.wbs_id,
+                    "field": "assignee",
+                    "workbook_value": task.owner,
+                    "reason": "no matching Linear workspace user",
+                })
     if task.duration:
         kwargs["estimate"] = float(task.duration)
     if task.end:
@@ -593,6 +687,8 @@ def build_push_requests(
     workbook_tasks: Optional[list[Any]] = None,
     payload: Optional["CpInput"] = None,
     existing_links: Optional[list[Any]] = None,
+    linear_users: Optional[list[dict]] = None,
+    unresolved_owners: Optional[list] = None,
 ) -> list[MCPRequest]:
     """Convert a SyncDiff into ordered MCP request descriptors for the
     agent to dispatch.
@@ -610,6 +706,13 @@ def build_push_requests(
     when pushing team changes — the team push must compute a full
     replacement labels list, which needs the issue's current labels
     plus the team-label mapping. Pass None for both to disable team push.
+
+    `linear_users` (list of `{"id", "email", "name", "displayName"}`
+    dicts) enables assignee pre-validation: workbook Owner values that
+    don't resolve to a workspace user are skipped instead of sent to
+    Linear (which would silently no-op them). Pass `unresolved_owners`
+    (a list — mutated in-place) to capture the unresolved entries for
+    surfacing in the sync result.
     """
     if linear_archive_state and not isinstance(linear_archive_state, str):
         raise TypeError("linear_archive_state must be a string")
@@ -645,6 +748,8 @@ def build_push_requests(
                     team_label_map=team_label_map,
                     task_start=task_start,
                     today=today,
+                    linear_users=linear_users,
+                    unresolved_owner_sink=unresolved_owners,
                 )
             if req is not None:
                 pass1.append(req)
@@ -657,6 +762,8 @@ def build_push_requests(
                 linear_team=linear_team,
                 linear_project=linear_project,
                 team_label_map=team_label_map,
+                linear_users=linear_users,
+                unresolved_owner_sink=unresolved_owners,
             )
             pass1.append(req)
             new_linear_id_by_wbs[row.wbs_id] = ""  # placeholder, filled by agent later

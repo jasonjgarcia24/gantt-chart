@@ -40,6 +40,10 @@ from gantt_lib.linear.sync import (
 def _sync_result_line(result: SyncResult) -> str:
     """Build the verified gantt-prefix result line for a SyncResult."""
     s = result.summary
+    unresolved = s.get("unresolved_owners", 0)
+    unresolved_suffix = f", {unresolved} owner unresolved" if unresolved == 1 else (
+        f", {unresolved} owners unresolved" if unresolved else ""
+    )
     if result.dry_run:
         return (
             f"gantt: linear-sync {result.program} — DRY RUN: "
@@ -47,8 +51,8 @@ def _sync_result_line(result: SyncResult) -> str:
             f"{s['pulled']} would pull, "
             f"{s['created']} would create, "
             f"{s['archived']} would archive, "
-            f"{s['unchanged']} unchanged "
-            "✓"
+            f"{s['unchanged']} unchanged"
+            f"{unresolved_suffix} ✓"
         )
     return (
         f"gantt: linear-sync {result.program} — "
@@ -57,8 +61,8 @@ def _sync_result_line(result: SyncResult) -> str:
         f"{s['created']} created, "
         f"{s['archived']} archived, "
         f"{s['conflicts_resolved']} conflicts resolved, "
-        f"{s['unchanged']} unchanged "
-        "✓"
+        f"{s['unchanged']} unchanged"
+        f"{unresolved_suffix} ✓"
     )
 
 

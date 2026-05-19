@@ -89,6 +89,10 @@ class SyncResult:
     diffs: list[dict]
     mcp_requests: list[dict]
     warnings: list[dict]
+    # Workbook Owner values that didn't resolve to a Linear workspace
+    # user. Push skipped the assignee field for these rows; the agent
+    # may surface a guest-invite suggestion (PR-H).
+    unresolved_owners: list[dict] = field(default_factory=list)
 
 
 # ----- Direction filtering ---------------------------------------------------
@@ -900,6 +904,7 @@ def sync(
 
     # 5. Build push-side MCP requests (always — for dry-run preview too).
     mcp_requests: list[MCPRequest]
+    unresolved_owners: list[dict] = []
     if direction in ("push", "both"):
         workbook_tasks_by_wbs = {t.id: t for t in workbook_tasks}
         linear_issues_by_id = {iss.linear_id: iss for iss in payload.issues}
@@ -914,12 +919,15 @@ def sync(
             workbook_tasks=workbook_tasks,
             payload=payload,
             existing_links=existing_links,
+            linear_users=payload.config.linear_users or None,
+            unresolved_owners=unresolved_owners,
         )
     else:
         mcp_requests = []
 
     applied_at = datetime.now(timezone.utc).isoformat()
     summary = _summary_counts(diff, mcp_requests)
+    summary["unresolved_owners"] = len(unresolved_owners)
 
     if not dry_run:
         # 6. Pull-side workbook writes.
@@ -953,4 +961,5 @@ def sync(
         diffs=[_row_diff_to_dict(r) for r in diff.rows],
         mcp_requests=[_mcp_request_to_dict(r) for r in mcp_requests],
         warnings=[],
+        unresolved_owners=unresolved_owners,
     )
