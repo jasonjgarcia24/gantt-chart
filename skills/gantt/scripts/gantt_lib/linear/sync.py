@@ -319,7 +319,28 @@ def _apply_pull_writes(
         # can write the corresponding sync_tab row.
         row.wbs_id = new_task.id
 
-    # 3) Refresh Sheets row-grouping (+/- gutter) so sub-issues are
+    # 3) Augment milestone-row Predecessors with member-issue references.
+    # Linear's ProjectMilestone has no blockedBy, but it semantically
+    # "depends on" its member issues. Walk issue.milestone_id, invert to
+    # milestone → [members], and write `<wbs>FS` entries on each
+    # milestone row's Predecessors (additive — preserves user edits).
+    # Runs AFTER pull_new so freshly-pulled members have assigned WBS ids
+    # in the wbs_by_linear index.
+    wbs_by_linear_after_pull = dict(wbs_by_linear)
+    for r in pull_new_rows_sorted:
+        if r.linear_id and r.wbs_id:
+            wbs_by_linear_after_pull[r.linear_id] = r.wbs_id
+    modified_milestones = _augment_milestone_predecessors_from_linear(
+        workbook_tasks=workbook_tasks,
+        payload=payload,
+        wbs_by_linear=wbs_by_linear_after_pull,
+    )
+    for ms_task in modified_milestones:
+        row_idx = sheets.find_task_row(program_ws, ms_task.id)
+        if row_idx is not None:
+            sheets.update_task_data(program_ws, row_idx, ms_task)
+
+    # 4) Refresh Sheets row-grouping (+/- gutter) so sub-issues are
     # collapsible under their parent. Only fires if any pull_new ran;
     # update-only syncs leave existing groups intact. Best-effort —
     # silently skips on API errors so a transient Sheets glitch doesn't
@@ -572,6 +593,83 @@ def _augment_predecessors_from_linear(
         return
 
     task.predecessors = format_predecessors(current_preds + additions)
+
+
+def _augment_milestone_predecessors_from_linear(
+    *,
+    workbook_tasks: list[Task],
+    payload: CpInput,
+    wbs_by_linear: dict[str, str],
+) -> list[Task]:
+    """For each milestone row already linked to a Linear milestone,
+    augment its Predecessors with `<wbs>FS` entries for every member
+    issue (the ones where `issue.milestone_id` points at this milestone).
+
+    Linear's `ProjectMilestone` has no `blockedBy` field — but a milestone
+    is conceptually "achieved when its constituent issues are complete,"
+    so the predecessors *are* the members. The data lives per-issue in
+    `issue.milestone_id`; this function inverts it to `milestone →
+    [members]` and writes them as additive workbook predecessors.
+
+    Additive only — preserves user-added entries (lags, SS/FF/SF, refs
+    to non-member tasks). Removals on the Linear side (member's
+    `milestone_id` cleared) are NOT reflected in the workbook, same
+    conservative policy as `_augment_predecessors_from_linear`.
+
+    Returns the list of milestone tasks that were modified. Caller is
+    responsible for writing them back to the sheet.
+    """
+    from gantt_lib.dsl import (
+        Predecessor,
+        format_predecessors,
+        parse_predecessors,
+    )
+
+    # Invert: milestone_id → [member linear_ids]
+    members_by_milestone: dict[str, list[str]] = {}
+    for issue in payload.issues:
+        if issue.is_milestone:
+            continue  # milestone rows aren't members of themselves
+        if not issue.milestone_id:
+            continue
+        members_by_milestone.setdefault(issue.milestone_id, []).append(issue.linear_id)
+
+    if not members_by_milestone:
+        return []
+
+    task_by_wbs = {t.id: t for t in workbook_tasks}
+    modified: list[Task] = []
+
+    for ms_linear_id, member_lids in members_by_milestone.items():
+        ms_wbs = wbs_by_linear.get(ms_linear_id)
+        if not ms_wbs:
+            continue  # milestone row not in workbook yet
+        ms_task = task_by_wbs.get(ms_wbs)
+        if ms_task is None:
+            continue
+
+        member_wbs_ids = [w for w in (wbs_by_linear.get(lid) for lid in member_lids) if w]
+        if not member_wbs_ids:
+            continue
+
+        try:
+            current_preds = parse_predecessors(ms_task.predecessors or "")
+        except Exception:
+            current_preds = []
+        have = {p.id for p in current_preds}
+
+        additions = [
+            Predecessor(id=wbs, rel="FS", lag=0)
+            for wbs in member_wbs_ids
+            if wbs not in have
+        ]
+        if not additions:
+            continue
+
+        ms_task.predecessors = format_predecessors(current_preds + additions)
+        modified.append(ms_task)
+
+    return modified
 
 
 # ----- Post-sync sync_tab links ----------------------------------------------

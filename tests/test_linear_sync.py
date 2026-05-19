@@ -26,6 +26,7 @@ from gantt_lib.linear.sync import (
     SyncResult,
     _apply_milestone_to_task,
     _assign_wbs_for_pull_new,
+    _augment_milestone_predecessors_from_linear,
     _augment_predecessors_from_linear,
     _build_pull_new_tasks,
     sync,
@@ -425,6 +426,139 @@ def test_augment_noop_when_no_blockedby_field_change():
     )
     _augment_predecessors_from_linear(task, [title_fc], wbs_by_linear={})
     assert task.predecessors == "1FS"
+
+
+# --- _augment_milestone_predecessors_from_linear -----------------------------
+
+
+def _ms_payload(issues: list[CpInputIssue]) -> CpInput:
+    """Bare-bones payload for milestone-predecessor tests."""
+    return CpInput(
+        project=CpInputProject(name="TEST", source="linear"),
+        config=CpInputConfig(default_duration_days=1, today=date(2026, 5, 18)),
+        issues=issues,
+        edges=[],
+    )
+
+
+def test_milestone_pred_augment_appends_member_wbs_as_fs():
+    """Two issues belong to a milestone; the milestone row's empty
+    Predecessors becomes `1FS, 2FS` (members listed in insertion order)."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch", duration=0,
+        milestone=True, predecessors="",
+    )
+    a = Task(id="1", level=1, name="A", duration=2)
+    b = Task(id="2", level=1, name="B", duration=3)
+    payload = _ms_payload([
+        CpInputIssue(linear_id="IBO-5", title="A", milestone_id="MS-abc"),
+        CpInputIssue(linear_id="IBO-6", title="B", milestone_id="MS-abc"),
+        CpInputIssue(linear_id="MS-abc", title="v1.0 launch", is_milestone=True),
+    ])
+    wbs_by_linear = {"IBO-5": "1", "IBO-6": "2", "MS-abc": "3"}
+    modified = _augment_milestone_predecessors_from_linear(
+        workbook_tasks=[ms_task, a, b],
+        payload=payload,
+        wbs_by_linear=wbs_by_linear,
+    )
+    assert modified == [ms_task]
+    assert "1FS" in ms_task.predecessors
+    assert "2FS" in ms_task.predecessors
+
+
+def test_milestone_pred_augment_preserves_user_added_predecessors():
+    """User wrote `5FS+10` (a non-member with custom lag) on the milestone
+    row. Augmenting with new members must NOT clobber it."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch", duration=0,
+        milestone=True, predecessors="5FS+10",
+    )
+    payload = _ms_payload([
+        CpInputIssue(linear_id="IBO-5", title="A", milestone_id="MS-abc"),
+        CpInputIssue(linear_id="MS-abc", title="v1.0 launch", is_milestone=True),
+    ])
+    _augment_milestone_predecessors_from_linear(
+        workbook_tasks=[ms_task],
+        payload=payload,
+        wbs_by_linear={"IBO-5": "1", "MS-abc": "3"},
+    )
+    assert "5FS+10" in ms_task.predecessors  # preserved verbatim
+    assert "1FS" in ms_task.predecessors      # member appended
+
+
+def test_milestone_pred_augment_skips_member_already_present():
+    """Member already listed (with any relation/lag) → don't double-add."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch", duration=0,
+        milestone=True, predecessors="1SS+5",  # member 1 with SS, not FS
+    )
+    payload = _ms_payload([
+        CpInputIssue(linear_id="IBO-5", title="A", milestone_id="MS-abc"),
+        CpInputIssue(linear_id="MS-abc", title="v1.0 launch", is_milestone=True),
+    ])
+    modified = _augment_milestone_predecessors_from_linear(
+        workbook_tasks=[ms_task],
+        payload=payload,
+        wbs_by_linear={"IBO-5": "1", "MS-abc": "3"},
+    )
+    assert modified == []  # nothing to add
+    assert ms_task.predecessors == "1SS+5"  # unchanged
+
+
+def test_milestone_pred_augment_skips_unresolvable_members():
+    """Member issue not yet linked to a workbook row → silently skip;
+    next sync will pick it up once the member row exists."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch", duration=0,
+        milestone=True, predecessors="",
+    )
+    payload = _ms_payload([
+        CpInputIssue(linear_id="IBO-5", title="A", milestone_id="MS-abc"),
+        CpInputIssue(linear_id="IBO-99", title="B", milestone_id="MS-abc"),
+        CpInputIssue(linear_id="MS-abc", title="v1.0 launch", is_milestone=True),
+    ])
+    _augment_milestone_predecessors_from_linear(
+        workbook_tasks=[ms_task],
+        payload=payload,
+        wbs_by_linear={"IBO-5": "1", "MS-abc": "3"},  # IBO-99 absent
+    )
+    # Only the resolvable one (IBO-5 → wbs 1) is added.
+    assert ms_task.predecessors == "1FS"
+
+
+def test_milestone_pred_augment_skips_missing_milestone_row():
+    """Linear has a milestone with members, but the workbook hasn't
+    materialized the milestone row yet → no-op (caller hasn't pulled
+    the milestone row into the workbook)."""
+    a = Task(id="1", level=1, name="A", duration=2)
+    payload = _ms_payload([
+        CpInputIssue(linear_id="IBO-5", title="A", milestone_id="MS-abc"),
+        CpInputIssue(linear_id="MS-abc", title="v1.0 launch", is_milestone=True),
+    ])
+    modified = _augment_milestone_predecessors_from_linear(
+        workbook_tasks=[a],  # no milestone row
+        payload=payload,
+        wbs_by_linear={"IBO-5": "1"},  # MS-abc not linked yet
+    )
+    assert modified == []
+
+
+def test_milestone_pred_augment_noop_when_no_milestone_members():
+    """Payload has no issues with milestone_id set → nothing to derive."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch", duration=0,
+        milestone=True, predecessors="",
+    )
+    payload = _ms_payload([
+        CpInputIssue(linear_id="IBO-5", title="A"),  # no milestone_id
+        CpInputIssue(linear_id="MS-abc", title="v1.0 launch", is_milestone=True),
+    ])
+    modified = _augment_milestone_predecessors_from_linear(
+        workbook_tasks=[ms_task],
+        payload=payload,
+        wbs_by_linear={"IBO-5": "1", "MS-abc": "3"},
+    )
+    assert modified == []
 
 
 # --- _apply_milestone_to_task ------------------------------------------------
