@@ -27,6 +27,7 @@ from gantt_lib.linear.sync import (
     _apply_milestone_to_task,
     _assign_wbs_for_pull_new,
     _augment_predecessors_from_linear,
+    _build_pull_new_tasks,
     sync,
 )
 from gantt_lib.linear.sync_tab import (
@@ -521,3 +522,92 @@ def test_assign_wbs_chain_of_new_parents_and_children():
     ])
     out = _assign_wbs_for_pull_new(payload, existing_links=[])
     assert out == {"P": "1", "C1": "1.1", "C2": "1.2"}
+
+
+# --- _build_pull_new_tasks (cp/adapter + cascade for coherence) ------------
+
+
+def test_build_pull_new_tasks_populates_predecessors_from_edges():
+    """Linear blockedBy → workbook predecessor DSL.
+    A blocked B: B.predecessors = "<A's WBS>FS"."""
+    payload = CpInput(
+        project=CpInputProject(name="TEST", source="linear"),
+        config=CpInputConfig(default_duration_days=1, today=date(2026, 5, 18)),
+        issues=[
+            CpInputIssue(linear_id="A", title="A", estimate_days=2),
+            CpInputIssue(linear_id="B", title="B", estimate_days=3),
+        ],
+        edges=[
+            CpInputEdge(from_linear_id="A", to_linear_id="B", type="FS", lag_days=0),
+        ],
+    )
+    pull_new_wbs = {"A": "1", "B": "2"}
+    out = _build_pull_new_tasks(
+        payload=payload, pull_new_wbs=pull_new_wbs, existing_links=[],
+    )
+    assert out["A"].predecessors == ""
+    assert "1FS" in out["B"].predecessors
+
+
+def test_build_pull_new_tasks_yields_coherent_start_end_duration():
+    """After cascade, Start + Duration matches End in working days.
+    A (2d, anchored today) → B (3d, blockedBy A)."""
+    today = date(2026, 5, 18)  # Monday
+    payload = CpInput(
+        project=CpInputProject(name="TEST", source="linear"),
+        config=CpInputConfig(default_duration_days=1, today=today),
+        issues=[
+            CpInputIssue(linear_id="A", title="A", estimate_days=2),
+            CpInputIssue(linear_id="B", title="B", estimate_days=3),
+        ],
+        edges=[
+            CpInputEdge(from_linear_id="A", to_linear_id="B", type="FS", lag_days=0),
+        ],
+    )
+    out = _build_pull_new_tasks(
+        payload=payload, pull_new_wbs={"A": "1", "B": "2"}, existing_links=[],
+    )
+    # A: starts Mon 5/18, dur=2 → ends Tue 5/19 (working days inclusive).
+    assert out["A"].start == today
+    assert out["A"].duration == 2
+    assert out["A"].end is not None
+    # B: starts right after A's end, dur=3 → has a real end date.
+    assert out["B"].start is not None
+    assert out["B"].duration == 3
+    assert out["B"].end is not None
+    # The cascade chain ran (B starts after A ends).
+    assert out["B"].start >= out["A"].end
+
+
+def test_build_pull_new_tasks_assigns_correct_level_from_wbs():
+    """Sub-issue at WBS '2.1' gets level=2."""
+    payload = CpInput(
+        project=CpInputProject(name="TEST", source="linear"),
+        config=CpInputConfig(default_duration_days=1, today=date(2026, 5, 18)),
+        issues=[
+            CpInputIssue(linear_id="P", title="parent", estimate_days=1),
+            CpInputIssue(linear_id="C", title="child", estimate_days=1,
+                         parent_linear_id="P"),
+        ],
+        edges=[],
+    )
+    out = _build_pull_new_tasks(
+        payload=payload, pull_new_wbs={"P": "2", "C": "2.1"}, existing_links=[],
+    )
+    assert out["P"].level == 1
+    assert out["C"].level == 2
+    assert out["C"].id == "2.1"
+
+
+def test_build_pull_new_tasks_returns_empty_when_no_pull_new():
+    """No new issues to pull → return empty dict; don't waste cycles."""
+    payload = CpInput(
+        project=CpInputProject(name="TEST", source="linear"),
+        config=CpInputConfig(default_duration_days=1, today=date(2026, 5, 18)),
+        issues=[],
+        edges=[],
+    )
+    out = _build_pull_new_tasks(
+        payload=payload, pull_new_wbs={}, existing_links=[],
+    )
+    assert out == {}

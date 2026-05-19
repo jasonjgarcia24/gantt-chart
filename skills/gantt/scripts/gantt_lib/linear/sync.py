@@ -266,36 +266,40 @@ def _apply_pull_writes(
         if row_idx is not None:
             sheets.update_task_data(program_ws, row_idx, task)
 
-    # 2) pull_new: append fresh Tasks with assigned WBS ids that honor
-    # parent_linear_id (so Linear sub-issues land as level-N+1 children
-    # under the parent's WBS, e.g. "2.1" instead of next-free top-level).
+    # 2) pull_new: build all new rows through cp/adapter + cascade so the
+    # output is internally coherent (Start+Duration=End in working days,
+    # predecessor DSL strings populated from Linear's blockedBy edges).
+    # The deleted pull.py (P2-T7) routed through cp/adapter for the same
+    # reason; bypassing it leaves Start/End/Duration mutually inconsistent
+    # and Predecessors empty.
     pull_new_wbs = _assign_wbs_for_pull_new(payload, existing_links)
+    pull_new_tasks_by_linear = _build_pull_new_tasks(
+        payload=payload,
+        pull_new_wbs=pull_new_wbs,
+        existing_links=existing_links,
+    )
     for row in diff.rows:
         if row.action != "pull_new":
             continue
         issue = issue_by_linear.get(row.linear_id)
         if issue is None:
             continue
-        new_wbs = pull_new_wbs.get(issue.linear_id) or next_wbs_id(workbook_tasks)
-        # Level = depth in the WBS hierarchy. "1" → 1, "2.1" → 2, "1.2.3" → 3.
-        level = 1 + new_wbs.count(".")
-        # Anchor: mirror cp/adapter behavior — if no Linear startedAt
-        # and no blockers, default to today so cascade doesn't refuse
-        # the next recalc with UnanchoredError. Issues with blockers
-        # in Linear will get their start from cascade once the
-        # predecessor reference is wired up.
-        start = issue.start_anchor or payload.config.today
-        new_task = Task(
-            id=new_wbs,
-            level=level,
-            name=issue.title,
-            owner=issue.assignee,
-            duration=int(issue.estimate_days) if issue.estimate_days else 0,
-            status=issue.state,
-            milestone=issue.is_milestone,
-            start=start,
-            end=issue.end_anchor,
-        )
+        new_task = pull_new_tasks_by_linear.get(issue.linear_id)
+        if new_task is None:
+            # Defensive fallback when cp/adapter rejected the issue (e.g.
+            # malformed edge). Emit a minimal Task so we don't lose the row.
+            fallback_wbs = pull_new_wbs.get(issue.linear_id) or next_wbs_id(workbook_tasks)
+            new_task = Task(
+                id=fallback_wbs,
+                level=1 + fallback_wbs.count("."),
+                name=issue.title,
+                owner=issue.assignee,
+                duration=int(issue.estimate_days) if issue.estimate_days else 0,
+                status=issue.state,
+                milestone=issue.is_milestone,
+                start=issue.start_anchor or payload.config.today,
+                end=issue.end_anchor,
+            )
         new_task.linear_url = issue.linear_url or None
         sheets.append_task(program_ws, new_task)
         # Update our in-memory workbook_tasks so subsequent next_wbs_id calls
@@ -303,7 +307,73 @@ def _apply_pull_writes(
         workbook_tasks.append(new_task)
         # Stash the assigned wbs back onto the SyncRowDiff so the caller
         # can write the corresponding sync_tab row.
-        row.wbs_id = new_wbs
+        row.wbs_id = new_task.id
+
+
+def _build_pull_new_tasks(
+    *,
+    payload: CpInput,
+    pull_new_wbs: dict[str, str],
+    existing_links: list[SyncLink],
+) -> dict[str, Task]:
+    """Run cp/adapter + cascade over the pulled CpInput so the new Tasks
+    are internally coherent: Start + Duration = End (in working days),
+    predecessors strung from Linear's blockedBy edges, level derived
+    from the WBS hierarchy. Returns `{linear_id: Task}` covering only
+    the pull_new issues (existing-link issues are ignored).
+
+    Edges that reference an existing-link issue from a pull_new issue
+    (or vice versa) get translated via the existing_links mapping, so a
+    new task blocked by an already-linked one gets a predecessor DSL
+    pointing at the existing workbook WBS. Cascade is best-effort — on
+    cycle / unanchored / missing-predecessor errors we return the
+    pre-cascade tasks (which still carry coherent Linear values).
+    """
+    from gantt_lib.cascade import (
+        cascade,
+        CycleError,
+        UnanchoredError,
+        MissingPredecessorError,
+    )
+    from gantt_lib.cp.adapter import cp_input_to_program
+
+    if not pull_new_wbs:
+        return {}
+
+    existing_by_linear = {l.linear_id: l.wbs_id for l in existing_links}
+    full_wbs: dict[str, str] = {**existing_by_linear, **pull_new_wbs}
+    # Ensure every CpInput issue has an assignment — defensive: missing
+    # ones get a fresh top-level slot to avoid cp/adapter raising.
+    for iss in payload.issues:
+        if iss.linear_id not in full_wbs:
+            taken = set(full_wbs.values())
+            n = 1
+            while str(n) in taken:
+                n += 1
+            full_wbs[iss.linear_id] = str(n)
+
+    try:
+        build = cp_input_to_program(payload, wbs_assignments=full_wbs)
+    except Exception:
+        return {}
+
+    # Cascade is best-effort. On failure (cycle, unanchored, missing
+    # predecessor) the tasks still carry sensible defaults from the
+    # adapter (start anchored to today, duration from estimate or
+    # default, predecessors populated). The downstream recalc will
+    # report the same error if it persists.
+    try:
+        cascade(build.program)
+    except (CycleError, UnanchoredError, MissingPredecessorError):
+        pass
+
+    pull_new_linears = set(pull_new_wbs.keys())
+    out: dict[str, Task] = {}
+    for task in build.program.tasks:
+        lid = build.wbs_to_linear.get(task.id)
+        if lid in pull_new_linears:
+            out[lid] = task
+    return out
 
 
 def _assign_wbs_for_pull_new(
