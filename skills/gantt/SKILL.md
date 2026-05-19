@@ -136,6 +136,7 @@ invocation starts with this read sequence:
 5. **For every issue:** `mcp__claude_ai_Linear__get_issue(id=<issue>, includeRelations=true)` — needed because `list_issues` does NOT include `blockedBy` / `relations`. This is the dominant per-sync read cost: roughly N calls for an N-issue project.
 6. `mcp__claude_ai_Linear__list_milestones(project=<id>)` — prefer this over `get_project(includeMilestones)` (cleaner numeric `progress` 0..1).
 7. `mcp__claude_ai_Linear__list_issue_statuses(team=<team>)` — **required for Phase-2 archive**; also needed for custom-state name mapping. Cache for the session.
+8. `mcp__claude_ai_Linear__list_users()` — **required for assignee pre-validation** so the CLI can skip workbook Owner values that don't resolve to a workspace user (Linear's `save_issue.assignee` silently no-ops invalid names). Cache for the session.
 
 Cost note: surface to the user before step 5 fires if the project has
 more than ~20 issues. *"This project has 47 issues — fetching blocker
@@ -206,6 +207,7 @@ Build the JSON payload that the CLI expects. Field-by-field:
 | `config.linear_project` | the project name from `list_projects` | **Required for Phase-2 create** |
 | `config.linear_archive_state` | first state of `type=="canceled"` from `list_issue_statuses` (e.g. `"Canceled"`) | **Required for Phase-2 archive**. If empty, archive requests are silently skipped |
 | `config.linear_team_label_map` | `{workbook_team_name: linear_label_name}` dict — populate from user-supplied mapping or workbook config | **Optional**. Enables Team ↔ Linear-labels bidirectional sync. Empty `{}` disables team sync (workbook Team becomes a sidecar-only field). |
+| `config.linear_users` | `list_users()` response, mapped to `[{id, email, name, displayName}, ...]` | **Required for assignee push**. Empty `[]` disables assignee pre-validation (raw workbook Owner is sent to Linear and may silently no-op). |
 | `issues[].linear_id` | `issue.id` (e.g. `JAS-5`) | The Linear identifier, not the UUID |
 | `issues[].title` | `issue.title` | |
 | `issues[].state` | mapped from `issue.statusType` | See state mapping table — map by **type**, not name |
@@ -261,6 +263,8 @@ merge pages before invoking the CLI.
 **Team ↔ labels mapping** — when the user wants Team sync, fetch labels per team via `list_issue_labels(team=<team_name>)` and ask the user (or read from a workbook-side config) for the workbook-team → Linear-label correspondence. Populate `config.linear_team_label_map` accordingly. The team-label set must be mutually-exclusive: each issue should carry at most one team-label, or pull-side team derivation will silently pick the first-match.
 
 **Milestone bidirectional sync (PR2b)** — when a workbook user sets the visible "Milestone Link" column (col M) on a task to a milestone-row's WBS, the CLI translates that to the milestone's `MS-<uuid>` and pushes `save_issue(milestone=<uuid>)` (strips the `MS-` prefix). On pull, the agent must populate `issues[].milestone_id` as `"MS-" + linear_milestone_uuid` so the merge engine can compare it directly to the workbook-derived value. Milestone rows themselves stay synced via the existing `linear_id="MS-<uuid>"` convention; their title + targetDate round-trip via the standard title/due_date paths.
+
+**Assignee pre-validation (PR-G)** — workbook Owner cells can contain either plain text (legacy) or Google Sheets person chips (preferred — `sheets.read_owner_chip_emails` lifts the chip's canonical email automatically). On read, `task.owner` holds whatever is most-resolvable: chip email if present, else the raw cell text. Push then resolves that against `config.linear_users` (which the agent populates from `list_users()`). When the resolver can't match, the assignee field is dropped from the `save_issue` kwargs entirely — better than sending a value Linear silently no-ops. Unresolved values are surfaced in `SyncResult.unresolved_owners` (per-row list) and `summary.unresolved_owners` (count); the stderr result line appends ", N owner(s) unresolved" when non-zero. External collaborators who aren't workspace users will appear in this list each sync — that's expected; the user can invite them as guests in Linear if they want assignee sync to start working.
 
 ### Dry-run-first + two-stage confirmation
 

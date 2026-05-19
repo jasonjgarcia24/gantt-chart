@@ -106,7 +106,111 @@ def read_program_tasks_with_rows(ws) -> list[tuple[Task, int, list[str]]]:
             if url:
                 task.linear_url = url
 
+    # Person-chip enrichment: when the Owner cell contains a Google
+    # Sheets person chip, replace the plain-text task.owner with the
+    # chip's canonical email so the push code can match it cleanly
+    # against the Linear workspace user list.
+    ss = getattr(ws, "spreadsheet", None)
+    if ss is not None:
+        try:
+            chip_emails = read_owner_chip_emails(ss, ws)
+        except Exception:
+            chip_emails = {}
+        if chip_emails:
+            for task, row_idx, _raw in out:
+                email = chip_emails.get(row_idx)
+                if email:
+                    task.owner = email
+
     return out
+
+
+def parse_owner_chip_emails(response: dict, first_data_row: int) -> dict[int, str]:
+    """Pure parser: extract `{row_idx: email}` from a `spreadsheets.get`
+    response that requested the Owner column's `chipRuns`.
+
+    Returns the row indices (1-based, sheet coordinates) and emails for
+    cells that actually contain a person chip with an email; skips cells
+    with no chip or with chips that have no email.
+
+    Splitting this out from `read_owner_chip_emails` lets tests cover the
+    parsing without mocking the entire googleapiclient call chain.
+    """
+    out: dict[int, str] = {}
+    sheets_data = response.get("sheets", [])
+    if not sheets_data:
+        return out
+    data_blocks = sheets_data[0].get("data", [])
+    if not data_blocks:
+        return out
+    row_data = data_blocks[0].get("rowData", [])
+    for offset, row in enumerate(row_data):
+        values = row.get("values", [])
+        if not values:
+            continue
+        cell = values[0]
+        chip_runs = cell.get("chipRuns") or []
+        if not chip_runs:
+            continue
+        # First chip wins — person chips typically occupy the whole cell;
+        # if there are multiple, the first is conventionally the owner.
+        chip = chip_runs[0].get("chip", {})
+        person = chip.get("personProperties") or {}
+        email = (person.get("email") or "").strip()
+        if email:
+            out[first_data_row + offset] = email
+    return out
+
+
+def read_owner_chip_emails(ss, ws) -> dict[int, str]:
+    """Return `{row_idx: email}` for cells in the Owner column (col D)
+    that contain a Google Sheets person chip. Rows without chips are
+    absent from the dict — callers fall back to the cell's plain text.
+
+    Person chips store the canonical Google contact email in their
+    metadata; lifting it lets us push it directly to Linear's
+    `save_issue.assignee` (which resolves cleanly by email, unlike
+    free-text names).
+
+    Uses the lower-level `spreadsheets.get()` API with a `fields`
+    projection — gspread's `get_values()` strips chip metadata. Falls
+    back to `{}` (best-effort) on any error so a transient API hiccup
+    doesn't break the sync.
+    """
+    try:
+        from googleapiclient.discovery import build
+    except Exception:
+        return {}
+
+    # Resolve credentials from the gspread client.
+    try:
+        creds = getattr(getattr(ss, "client", None), "auth", None)
+        if creds is None:
+            return {}
+    except Exception:
+        return {}
+
+    last_data_row = schema.HEADER_ROWS + schema.DEFAULT_DATA_ROWS  # e.g. 4 + 100 = 104
+    owner_range = (
+        f"{ws.title}!"
+        f"{schema.col_letter(schema.COL_OWNER_IDX + 1)}{FIRST_DATA_ROW}:"
+        f"{schema.col_letter(schema.COL_OWNER_IDX + 1)}{last_data_row}"
+    )
+    try:
+        svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        resp = svc.spreadsheets().get(
+            spreadsheetId=ss.id,
+            ranges=[owner_range],
+            fields=(
+                "sheets.data.rowData.values("
+                "chipRuns(chip(personProperties(email,displayName))),"
+                "formattedValue)"
+            ),
+        ).execute()
+    except Exception:
+        return {}
+
+    return parse_owner_chip_emails(resp, FIRST_DATA_ROW)
 
 
 def _read_linear_urls_by_wbs(ws) -> dict[str, str]:
