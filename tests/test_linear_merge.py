@@ -473,3 +473,104 @@ def test_both_sides_gone_no_row_emitted():
         current_linear=_mk_payload([]),
     )
     assert len(diff.rows) == 0
+
+
+# --- due_date as a regular mergeable field -----------------------------------
+
+
+def test_due_date_is_mergeable():
+    assert "due_date" in MERGEABLE_FIELDS
+
+
+def test_due_date_workbook_changed_classifies_push():
+    """Workbook end moved; Linear dueDate unchanged → PUSH workbook→Linear."""
+    snap = IssueSnapshot(title="x", due_date="2026-06-01")
+    task = Task(
+        id="1", level=1, name="x", duration=3, end=date(2026, 6, 15),
+    )
+    link = _mk_link(wbs_id="1", linear_id="JAS-5", snapshot=snap)
+    issue = CpInputIssue(
+        linear_id="JAS-5", title="x",
+        end_anchor=date(2026, 6, 1),  # Linear unchanged from snapshot
+    )
+    diff = compute_sync_diff(
+        program="TEST",
+        workbook_tasks=[task],
+        existing_links=[link],
+        current_linear=_mk_payload([issue]),
+    )
+    row = diff.rows[0]
+    assert row.action == "update"
+    due_change = next(c for c in row.field_changes if c.field == "due_date")
+    assert due_change.classification == FieldClassification.PUSH
+    assert due_change.resolved_to_value == "2026-06-15"
+
+
+def test_due_date_linear_changed_classifies_pull():
+    """Linear dueDate moved; workbook unchanged → PULL Linear→workbook."""
+    snap = IssueSnapshot(title="x", due_date="2026-06-01")
+    task = Task(
+        id="1", level=1, name="x", duration=3, end=date(2026, 6, 1),  # workbook matches snapshot
+    )
+    link = _mk_link(wbs_id="1", linear_id="JAS-5", snapshot=snap)
+    issue = CpInputIssue(
+        linear_id="JAS-5", title="x",
+        end_anchor=date(2026, 6, 20),  # Linear moved
+    )
+    diff = compute_sync_diff(
+        program="TEST",
+        workbook_tasks=[task],
+        existing_links=[link],
+        current_linear=_mk_payload([issue]),
+    )
+    row = diff.rows[0]
+    assert row.action == "update"
+    due_change = next(c for c in row.field_changes if c.field == "due_date")
+    assert due_change.classification == FieldClassification.PULL
+    assert due_change.resolved_to_value == "2026-06-20"
+
+
+def test_due_date_true_conflict_linear_wins():
+    """Both sides changed dueDate to different values → CONFLICT; Linear wins."""
+    snap = IssueSnapshot(title="x", due_date="2026-06-01")
+    task = Task(
+        id="1", level=1, name="x", duration=3, end=date(2026, 6, 15),
+    )
+    link = _mk_link(wbs_id="1", linear_id="JAS-5", snapshot=snap)
+    issue = CpInputIssue(
+        linear_id="JAS-5", title="x",
+        end_anchor=date(2026, 6, 20),
+    )
+    diff = compute_sync_diff(
+        program="TEST",
+        workbook_tasks=[task],
+        existing_links=[link],
+        current_linear=_mk_payload([issue]),
+    )
+    row = diff.rows[0]
+    due_change = next(c for c in row.field_changes if c.field == "due_date")
+    assert due_change.classification == FieldClassification.CONFLICT
+    assert due_change.resolved_to_source == "linear"
+    assert due_change.resolved_to_value == "2026-06-20"
+
+
+def test_due_date_unchanged_on_both_sides_omitted_from_diff():
+    """Workbook end == snapshot == Linear dueDate → due_date omitted from
+    field_changes (other fields may still differ; we only assert no
+    due_date entry)."""
+    snap = IssueSnapshot(title="x", due_date="2026-06-01")
+    task = Task(
+        id="1", level=1, name="x", duration=3, end=date(2026, 6, 1),
+    )
+    link = _mk_link(wbs_id="1", linear_id="JAS-5", snapshot=snap)
+    issue = CpInputIssue(
+        linear_id="JAS-5", title="x", end_anchor=date(2026, 6, 1),
+    )
+    diff = compute_sync_diff(
+        program="TEST",
+        workbook_tasks=[task],
+        existing_links=[link],
+        current_linear=_mk_payload([issue]),
+    )
+    row = diff.rows[0]
+    assert all(c.field != "due_date" for c in row.field_changes)

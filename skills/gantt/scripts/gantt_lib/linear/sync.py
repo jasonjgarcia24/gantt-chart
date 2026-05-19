@@ -551,11 +551,9 @@ def sync(
     mcp_requests: list[MCPRequest]
     if direction in ("push", "both"):
         workbook_tasks_by_wbs = {t.id: t for t in workbook_tasks}
-        linear_issues_by_id = {iss.linear_id: iss for iss in payload.issues}
         mcp_requests = build_push_requests(
             diff,
             workbook_tasks_by_wbs=workbook_tasks_by_wbs,
-            linear_issues_by_id=linear_issues_by_id,
             linear_team=payload.config.linear_team,
             linear_project=payload.config.linear_project,
             linear_archive_state=payload.config.linear_archive_state,
