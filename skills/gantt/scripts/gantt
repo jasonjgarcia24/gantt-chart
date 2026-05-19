@@ -506,9 +506,9 @@ def cmd_program_migrate_schema(args: argparse.Namespace) -> int:
         die(str(e))
 
     if before_version == "v2":
-        ok(f"program {args.name} migrate-schema — already v2, no changes ✓")
+        ok(f"program {args.name} migrate-schema — already v2, no changes")
     else:
-        ok(f"program {args.name} migrate-schema — {before_version} → {after_version} ✓")
+        ok(f"program {args.name} migrate-schema — {before_version} → {after_version}")
     return 0
 
 
