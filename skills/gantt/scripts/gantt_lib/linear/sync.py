@@ -911,6 +911,9 @@ def sync(
             linear_archive_state=payload.config.linear_archive_state,
             linear_issues_by_id=linear_issues_by_id,
             linear_team_label_map=payload.config.linear_team_label_map,
+            workbook_tasks=workbook_tasks,
+            payload=payload,
+            existing_links=existing_links,
         )
     else:
         mcp_requests = []

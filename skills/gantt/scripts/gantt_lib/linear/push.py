@@ -356,6 +356,96 @@ def _build_blockedby_request(
 # ----- Top-level entry point -------------------------------------------------
 
 
+def _build_milestone_membership_requests(
+    *,
+    workbook_tasks: list[Any],
+    payload: "CpInput",
+    existing_links: list[Any],
+) -> list[MCPRequest]:
+    """For each workbook milestone row, compute the set of member-issue
+    additions implied by `<wbs>FS` entries in its Predecessors that
+    aren't yet reflected in Linear's `issue.milestone` field. Emit one
+    `save_issue` request per addition to set the member's milestone.
+
+    Linear's `ProjectMilestone` has no `blockedBy` field, so the merge
+    engine can't reach it via the per-field push path. Instead, milestone
+    membership is encoded as `issue.milestone = <ms_uuid>` on each
+    member issue — workbook predecessors on a milestone row mean
+    "these are the members," and this helper pushes the corresponding
+    membership writes to the member issues themselves.
+
+    Filtering: only `<wbs>FS` entries with `lag == 0` count as
+    membership signals. Other relations (SS/FF/SF) and any non-zero
+    lag stay workbook-local — Linear's milestone has no lag/relation-
+    type concept to carry them.
+
+    Additive only — removals NOT generated. If a member was previously
+    in the workbook predecessors and the user removes it, the membership
+    in Linear stays put; user must clear via Linear UI. This is the
+    conservative default to avoid destroying milestone state on a
+    workbook edit that may have been accidental.
+
+    The MS- prefix on synthetic milestone linear_ids is stripped before
+    the save_issue call — Linear's milestone API takes the raw UUID.
+    """
+    from gantt_lib.dsl import parse_predecessors
+
+    # Map workbook milestone wbs → its MS-<uuid> linear_id (via links)
+    ms_linear_by_wbs: dict[str, str] = {
+        l.wbs_id: l.linear_id
+        for l in existing_links
+        if l.linear_id.startswith("MS-")
+    }
+    # Map wbs → linear_id for translating predecessor refs to issue ids
+    linear_by_wbs: dict[str, str] = {l.wbs_id: l.linear_id for l in existing_links}
+    # Current Linear milestone per non-milestone issue
+    current_milestone_by_linear: dict[str, str] = {
+        iss.linear_id: (iss.milestone_id or "")
+        for iss in payload.issues
+        if not iss.is_milestone
+    }
+
+    requests: list[MCPRequest] = []
+
+    for task in workbook_tasks:
+        if not getattr(task, "milestone", False):
+            continue
+        ms_linear_id = ms_linear_by_wbs.get(task.id)
+        if not ms_linear_id:
+            continue  # milestone row not yet linked to a Linear milestone
+
+        try:
+            preds = parse_predecessors(task.predecessors or "")
+        except Exception:
+            continue
+        # Only bare-FS-zero-lag entries count as membership.
+        member_wbs_ids = [p.id for p in preds if p.rel == "FS" and p.lag == 0]
+
+        # Strip MS- prefix; Linear's `milestone` param takes the raw UUID.
+        ms_uuid = ms_linear_id[3:] if ms_linear_id.startswith("MS-") else ms_linear_id
+
+        for wbs in member_wbs_ids:
+            member_linear_id = linear_by_wbs.get(wbs)
+            if not member_linear_id:
+                continue  # member task not linked to Linear yet
+            if member_linear_id.startswith("MS-"):
+                continue  # milestones can't be members of milestones
+            # Skip if Linear already has this member on the milestone.
+            if current_milestone_by_linear.get(member_linear_id) == ms_linear_id:
+                continue
+            requests.append(MCPRequest(
+                tool=SAVE_ISSUE_TOOL,
+                kwargs={"id": member_linear_id, "milestone": ms_uuid},
+                description=(
+                    f"set milestone membership: {member_linear_id} "
+                    f"→ {ms_linear_id} ({task.name})"
+                ),
+                pass_number=1,
+            ))
+
+    return requests
+
+
 def build_push_requests(
     diff: SyncDiff,
     *,
@@ -365,6 +455,9 @@ def build_push_requests(
     linear_archive_state: str,
     linear_issues_by_id: Optional[dict[str, CpInputIssue]] = None,
     linear_team_label_map: Optional[dict[str, str]] = None,
+    workbook_tasks: Optional[list[Any]] = None,
+    payload: Optional["CpInput"] = None,
+    existing_links: Optional[list[Any]] = None,
 ) -> list[MCPRequest]:
     """Convert a SyncDiff into ordered MCP request descriptors for the
     agent to dispatch.
@@ -483,6 +576,19 @@ def build_push_requests(
             ),
             pass_number=2,
             pass_1_placeholders=tuple([_placeholder_for(row.wbs_id), *placeholders]),
+        ))
+
+    # Milestone-row membership: workbook predecessors on milestone rows
+    # express member-issue relationships that Linear stores as
+    # `issue.milestone = <ms_uuid>` on the members themselves. Emit one
+    # save_issue per addition. Removals are intentionally NOT generated
+    # (conservative — see helper docstring). Requires the optional
+    # `workbook_tasks` + `payload` + `existing_links` args.
+    if workbook_tasks is not None and payload is not None and existing_links is not None:
+        pass1.extend(_build_milestone_membership_requests(
+            workbook_tasks=workbook_tasks,
+            payload=payload,
+            existing_links=existing_links,
         ))
 
     return pass1 + pass2

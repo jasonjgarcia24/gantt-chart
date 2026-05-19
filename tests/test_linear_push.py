@@ -522,3 +522,193 @@ def test_milestone_pull_emits_no_push():
     reqs = _build([row])
     assert reqs == []
 
+
+# --- milestone-row membership push -------------------------------------------
+
+
+def _mk_milestone_push_payload(issues: list[CpInputIssue]):
+    """Bare payload for membership-push tests."""
+    from datetime import date
+    from gantt_lib.cp.contracts import CpInput, CpInputConfig, CpInputProject
+    return CpInput(
+        project=CpInputProject(name="TEST", source="linear"),
+        config=CpInputConfig(default_duration_days=1, today=date(2026, 5, 18)),
+        issues=issues,
+        edges=[],
+    )
+
+
+def _mk_link(wbs_id: str, linear_id: str):
+    from gantt_lib.linear.sync_tab import SyncLink
+    return SyncLink(
+        program="TEST", wbs_id=wbs_id, linear_id=linear_id,
+        last_synced="2026-05-18T00:00:00Z",
+        linear_url=f"https://x/{linear_id}",
+    )
+
+
+def test_milestone_membership_push_emits_save_issue_for_new_member():
+    """Workbook adds `1FS` to milestone row's Predecessors. Member IBO-5
+    has no milestone in Linear → emit save_issue with `milestone` set to
+    the raw UUID (MS- prefix stripped)."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch",
+        milestone=True, predecessors="1FS",
+    )
+    member = Task(id="1", level=1, name="A", duration=2)
+    payload = _mk_milestone_push_payload([
+        CpInputIssue(linear_id="IBO-5", title="A"),  # no milestone in Linear
+        CpInputIssue(linear_id="MS-abc-uuid", title="v1.0 launch", is_milestone=True),
+    ])
+    links = [
+        _mk_link("1", "IBO-5"),
+        _mk_link("3", "MS-abc-uuid"),
+    ]
+    diff = SyncDiff(program="TEST", rows=[])
+    reqs = build_push_requests(
+        diff,
+        workbook_tasks_by_wbs={"1": member, "3": ms_task},
+        linear_team="Test", linear_project="P", linear_archive_state="Canceled",
+        workbook_tasks=[member, ms_task],
+        payload=payload,
+        existing_links=links,
+    )
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "IBO-5", "milestone": "abc-uuid"}
+    assert reqs[0].pass_number == 1
+    assert "milestone membership" in reqs[0].description
+
+
+def test_milestone_membership_push_skips_member_already_set_in_linear():
+    """Member IBO-5 already has milestone=MS-abc-uuid in Linear → no
+    redundant save_issue."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch",
+        milestone=True, predecessors="1FS",
+    )
+    member = Task(id="1", level=1, name="A", duration=2)
+    payload = _mk_milestone_push_payload([
+        CpInputIssue(linear_id="IBO-5", title="A", milestone_id="MS-abc-uuid"),
+        CpInputIssue(linear_id="MS-abc-uuid", title="v1.0 launch", is_milestone=True),
+    ])
+    links = [_mk_link("1", "IBO-5"), _mk_link("3", "MS-abc-uuid")]
+    reqs = build_push_requests(
+        SyncDiff(program="TEST", rows=[]),
+        workbook_tasks_by_wbs={"1": member, "3": ms_task},
+        linear_team="Test", linear_project="P", linear_archive_state="Canceled",
+        workbook_tasks=[member, ms_task], payload=payload, existing_links=links,
+    )
+    assert reqs == []
+
+
+def test_milestone_membership_push_only_bare_fs_zero_lag_counts():
+    """Predecessor `1SS` (SS relation) and `2FS+3` (lag != 0) are NOT
+    membership signals — they stay workbook-local. Only `<wbs>FS` with
+    zero lag pushes."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch",
+        milestone=True, predecessors="1SS, 2FS+3, 4FS",
+    )
+    a = Task(id="1", level=1, name="A")
+    b = Task(id="2", level=1, name="B")
+    d = Task(id="4", level=1, name="D")
+    payload = _mk_milestone_push_payload([
+        CpInputIssue(linear_id="IBO-1", title="A"),
+        CpInputIssue(linear_id="IBO-2", title="B"),
+        CpInputIssue(linear_id="IBO-4", title="D"),
+        CpInputIssue(linear_id="MS-uuid", title="v1.0 launch", is_milestone=True),
+    ])
+    links = [
+        _mk_link("1", "IBO-1"), _mk_link("2", "IBO-2"),
+        _mk_link("4", "IBO-4"), _mk_link("3", "MS-uuid"),
+    ]
+    reqs = build_push_requests(
+        SyncDiff(program="TEST", rows=[]),
+        workbook_tasks_by_wbs={"1": a, "2": b, "4": d, "3": ms_task},
+        linear_team="Test", linear_project="P", linear_archive_state="Canceled",
+        workbook_tasks=[a, b, d, ms_task], payload=payload, existing_links=links,
+    )
+    # Only wbs=4 (the lone bare-FS-zero-lag entry) becomes a membership push.
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "IBO-4", "milestone": "uuid"}
+
+
+def test_milestone_membership_push_skips_unlinked_members():
+    """Predecessor refs a workbook task that hasn't been pushed to Linear
+    yet (no SyncLink). Silently skip — next sync after the member's
+    create will pick it up."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch",
+        milestone=True, predecessors="1FS, 2FS",
+    )
+    a = Task(id="1", level=1, name="A")
+    b = Task(id="2", level=1, name="B")  # not linked
+    payload = _mk_milestone_push_payload([
+        CpInputIssue(linear_id="IBO-1", title="A"),
+        CpInputIssue(linear_id="MS-uuid", title="v1.0 launch", is_milestone=True),
+    ])
+    links = [_mk_link("1", "IBO-1"), _mk_link("3", "MS-uuid")]
+    reqs = build_push_requests(
+        SyncDiff(program="TEST", rows=[]),
+        workbook_tasks_by_wbs={"1": a, "2": b, "3": ms_task},
+        linear_team="Test", linear_project="P", linear_archive_state="Canceled",
+        workbook_tasks=[a, b, ms_task], payload=payload, existing_links=links,
+    )
+    # Only IBO-1 pushes; b has no link so its entry is silently skipped.
+    assert len(reqs) == 1
+    assert reqs[0].kwargs["id"] == "IBO-1"
+
+
+def test_milestone_membership_push_skips_unlinked_milestone_row():
+    """Milestone row exists in workbook but no SyncLink yet (e.g.
+    workbook-side milestone marker pre-create) → no push (nowhere to
+    point membership to)."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch",
+        milestone=True, predecessors="1FS",
+    )
+    a = Task(id="1", level=1, name="A")
+    payload = _mk_milestone_push_payload([
+        CpInputIssue(linear_id="IBO-1", title="A"),
+    ])
+    links = [_mk_link("1", "IBO-1")]  # no link for ms_task
+    reqs = build_push_requests(
+        SyncDiff(program="TEST", rows=[]),
+        workbook_tasks_by_wbs={"1": a, "3": ms_task},
+        linear_team="Test", linear_project="P", linear_archive_state="Canceled",
+        workbook_tasks=[a, ms_task], payload=payload, existing_links=links,
+    )
+    assert reqs == []
+
+
+def test_milestone_membership_push_does_not_remove_existing_members():
+    """Member IBO-7 IS on milestone in Linear but workbook predecessors
+    don't list it. Per additive-only policy, do NOT emit a removal
+    request — the user must clear in Linear UI."""
+    ms_task = Task(
+        id="3", level=1, name="v1.0 launch",
+        milestone=True, predecessors="",  # no members listed in workbook
+    )
+    member = Task(id="2", level=1, name="X")
+    payload = _mk_milestone_push_payload([
+        CpInputIssue(linear_id="IBO-7", title="X", milestone_id="MS-uuid"),
+        CpInputIssue(linear_id="MS-uuid", title="v1.0 launch", is_milestone=True),
+    ])
+    links = [_mk_link("2", "IBO-7"), _mk_link("3", "MS-uuid")]
+    reqs = build_push_requests(
+        SyncDiff(program="TEST", rows=[]),
+        workbook_tasks_by_wbs={"2": member, "3": ms_task},
+        linear_team="Test", linear_project="P", linear_archive_state="Canceled",
+        workbook_tasks=[member, ms_task], payload=payload, existing_links=links,
+    )
+    # No requests at all — additive only.
+    assert reqs == []
+
+
+def test_milestone_membership_push_inactive_without_optional_args():
+    """Backward compat: omitting workbook_tasks / payload / existing_links
+    means no milestone-membership requests are generated (the regular
+    per-row push path still works)."""
+    reqs = _build([])  # _build doesn't pass the new optional args
+    assert reqs == []
+
