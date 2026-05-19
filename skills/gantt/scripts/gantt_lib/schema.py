@@ -45,10 +45,16 @@ COL_STATUS_LETTER = "J"
 COL_MILESTONE_LETTER = "L"
 
 # Sheets API uses 0-based indices in batch_update payloads.
+COL_NAME_IDX = 2
 COL_TEAM_IDX = 4
+COL_PERCENT_IDX = 8
 COL_STATUS_IDX = 9
 COL_MILESTONE_IDX = 11
+COL_NOTES_IDX = 12
 TIMELINE_FIRST_COL_IDX = 13  # column N
+
+# Letter form for formulas.
+COL_NAME_LETTER = "C"
 
 TIMELINE_DAYS = 126          # calendar days of horizon (~18 weeks, Mon-Sun cells)
 TIMELINE_COL_PIXELS = 20     # narrow daily columns; status text overflows
@@ -57,6 +63,9 @@ STATUS_VALUES = Status.all()
 
 # Visual styling
 WEEKEND_BG = {"red": 0.93, "green": 0.93, "blue": 0.93}     # subtle light grey
+# Slightly darker than weekend grey so the "this won't sync" hint
+# reads as intentional muting, not just another weekend cell.
+WORKBOOK_ONLY_GREY = {"red": 0.88, "green": 0.88, "blue": 0.88}
 MONTH_BORDER_COLOR = {"red": 0.75, "green": 0.75, "blue": 0.75}    # lighter grey
 QUARTER_BORDER_COLOR = {"red": 0.40, "green": 0.40, "blue": 0.40}  # darker grey
 # Default team color: applied to timeline bars on rows whose team cell
@@ -373,6 +382,55 @@ def weekend_cf_request(sheet_id: int, timeline_cols: int = TIMELINE_DAYS) -> dic
                         "values": [{"userEnteredValue": formula}],
                     },
                     "format": {"backgroundColor": WEEKEND_BG},
+                },
+            },
+            "index": 0,
+        }
+    }
+
+
+def linked_workbook_only_grey_out_cf_request(
+    sheet_id: int,
+    extra_col_idxs: tuple[int, ...] = (),
+) -> dict:
+    """Conditional formatting: grey out cells in workbook-only fields
+    (`% Complete`, `Notes`) on rows that are linked to Linear.
+
+    Linked rows are detected by checking whether the Name cell (column C)
+    contains a formula — the linear-sync flow writes a `=HYPERLINK(...)`
+    formula into the Name column whenever it links a workbook row to a
+    Linear issue, so `ISFORMULA($C{row})` is a reliable marker.
+
+    The visual hint signals to the user "this field is intentionally
+    workbook-local — editing it has no effect on Linear." Cells stay
+    fully editable; this is a cosmetic cue only.
+
+    `extra_col_idxs` lets callers extend the greyed-out set with
+    additional column indices (e.g. include Team via COL_TEAM_IDX
+    until PR3 wires teams via Linear labels).
+    """
+    cols = (COL_PERCENT_IDX, COL_NOTES_IDX, *extra_col_idxs)
+    formula = f"=ISFORMULA(${COL_NAME_LETTER}{FIRST_TASK_ROW})"
+    ranges = [
+        {
+            "sheetId": sheet_id,
+            "startRowIndex": HEADER_ROWS,
+            "endRowIndex": _max_data_row(),
+            "startColumnIndex": col_idx,
+            "endColumnIndex": col_idx + 1,
+        }
+        for col_idx in cols
+    ]
+    return {
+        "addConditionalFormatRule": {
+            "rule": {
+                "ranges": ranges,
+                "booleanRule": {
+                    "condition": {
+                        "type": "CUSTOM_FORMULA",
+                        "values": [{"userEnteredValue": formula}],
+                    },
+                    "format": {"backgroundColor": WORKBOOK_ONLY_GREY},
                 },
             },
             "index": 0,

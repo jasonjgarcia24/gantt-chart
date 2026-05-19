@@ -106,9 +106,9 @@ Captured across `tests/fixtures/linear_mcp/save_issue_*.json` and `linear/snapsh
 
 | Field | Why not synced |
 |-------|----------------|
-| `% Complete` | Linear has no native completion-% on issues; state transitions are the proxy |
-| `Notes` | Linear's `description` is rich-text markdown — semantic mismatch with workbook freeform notes; not yet wired |
-| `Team` | Linear has no per-issue team field (team is project-level). Could map to `labels` in Phase 2+ but opt-in |
+| `% Complete` | Linear has no native completion-% on issues; state transitions are the proxy. Greyed out on linked rows in the workbook UI as a visual cue. |
+| `Notes` | Linear's `description` is rich-text markdown — semantic mismatch with workbook freeform notes; not yet wired. Greyed out on linked rows. |
+| `Team` | Linear has no per-issue team field (team is project-level). PR3 will wire bidirectional sync via Linear labels. |
 | `Level` | Pure UI artifact (WBS depth) — meaningless in Linear |
 
 ### Linear-only (we don't consume)

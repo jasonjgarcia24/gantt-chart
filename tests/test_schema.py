@@ -10,21 +10,27 @@ from datetime import date
 import pytest
 
 from gantt_lib.schema import (
+    COL_NOTES_IDX,
+    COL_PERCENT_IDX,
+    COL_TEAM_IDX,
     DATA_HEADERS,
     DAY_HEADER_ROW,
     DEFAULT_TEAM_COLOR,
+    FIRST_TASK_ROW,
     HEADER_ROWS,
     NUM_DATA_COLS,
     PROGRAM_TAB_PREFIX,
     STATUS_VALUES,
     TIMELINE_DAYS,
     WEEK_HEADER_ROW,
+    WORKBOOK_ONLY_GREY,
     boundary_border_request,
     col_letter,
     day_row_format_request,
     default_team_color_cf_request,
     grouping_runs,
     hex_to_rgb01,
+    linked_workbook_only_grey_out_cf_request,
     make_timeline_days,
     month_label,
     program_tab_name,
@@ -283,6 +289,48 @@ def test_weekend_cf_excludes_quarter_and_month_header_rows():
     color = rule["booleanRule"]["format"]["backgroundColor"]
     assert 0.85 < color["red"] < 1.0
     assert color["red"] == color["green"] == color["blue"]
+
+
+def test_linked_workbook_only_grey_out_cf_default_columns():
+    """Grey-out CF must cover %Complete and Notes by default — the two
+    workbook-only fields that have no Linear counterpart and won't sync."""
+    req = linked_workbook_only_grey_out_cf_request(sheet_id=42)
+    rule = req["addConditionalFormatRule"]["rule"]
+    col_starts = sorted(r["startColumnIndex"] for r in rule["ranges"])
+    assert col_starts == [COL_PERCENT_IDX, COL_NOTES_IDX]
+    for r in rule["ranges"]:
+        assert r["sheetId"] == 42
+        assert r["startRowIndex"] == HEADER_ROWS  # task region only, not headers
+        # Each range is a single column (endColumnIndex = startColumnIndex+1).
+        assert r["endColumnIndex"] == r["startColumnIndex"] + 1
+
+
+def test_linked_workbook_only_grey_out_cf_formula_uses_isformula_on_name():
+    """The marker for 'this row is linked to Linear' is a HYPERLINK formula
+    in the Name column (col C) — written by the sync flow on link. So the
+    CF formula checks ISFORMULA($C5) (anchor row, relative)."""
+    req = linked_workbook_only_grey_out_cf_request(sheet_id=42)
+    formula = req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    assert "ISFORMULA" in formula
+    assert f"$C{FIRST_TASK_ROW}" in formula
+
+
+def test_linked_workbook_only_grey_out_cf_uses_workbook_only_grey():
+    req = linked_workbook_only_grey_out_cf_request(sheet_id=42)
+    color = req["addConditionalFormatRule"]["rule"]["booleanRule"]["format"]["backgroundColor"]
+    assert color == WORKBOOK_ONLY_GREY
+
+
+def test_linked_workbook_only_grey_out_cf_accepts_extra_columns():
+    """extra_col_idxs lets the caller add columns to the greyed set —
+    e.g. include Team (col E) until PR3 wires teams via Linear labels."""
+    req = linked_workbook_only_grey_out_cf_request(
+        sheet_id=42, extra_col_idxs=(COL_TEAM_IDX,),
+    )
+    col_starts = sorted(r["startColumnIndex"] for r in req["addConditionalFormatRule"]["rule"]["ranges"])
+    assert COL_TEAM_IDX in col_starts
+    assert COL_PERCENT_IDX in col_starts
+    assert COL_NOTES_IDX in col_starts
 
 
 def test_boundary_border_request_spans_full_vertical():
