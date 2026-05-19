@@ -35,6 +35,7 @@ from gantt_lib.linear.merge import (
     FieldChange,
     FieldClassification,
     MERGEABLE_FIELDS,
+    MILESTONE_WORKBOOK_PROTECTED,
     SyncDiff,
     SyncRowDiff,
     classify_field,
@@ -617,3 +618,150 @@ def test_due_date_unchanged_on_both_sides_omitted_from_diff():
     )
     row = diff.rows[0]
     assert all(c.field != "due_date" for c in row.field_changes)
+
+
+# --- milestone workbook-protected fields -------------------------------------
+
+
+def test_milestone_protected_set_matches_visual_grey_out():
+    """The 7 fields protected on milestone rows match the API reality:
+    `ProjectMilestone` has no assignee / estimate / state / blockedBy /
+    parentId / labels / membership-of-itself."""
+    assert MILESTONE_WORKBOOK_PROTECTED == frozenset({
+        "assignee", "estimate", "state",
+        "blockedby", "parent", "team", "milestone",
+    })
+    # All protected fields must also be in MERGEABLE_FIELDS — protection
+    # is meaningless if the field never reaches the merge in the first place.
+    for f in MILESTONE_WORKBOOK_PROTECTED:
+        assert f in MERGEABLE_FIELDS, f"{f} is protected but not mergeable"
+
+
+def test_milestone_row_protects_team_from_linear_clear():
+    """The motivating bug: workbook user sets team=FIN on a milestone row;
+    Linear's ProjectMilestone has no labels at all; without protection,
+    the merge would classify as PULL and clear the workbook FIN. With
+    protection, the team field is skipped entirely — workbook FIN
+    survives the sync."""
+    snap = IssueSnapshot(title="v1.0 launch", team="FIN")
+    task = Task(
+        id="6", level=1, name="v1.0 launch",
+        team="FIN", duration=0, milestone=True,
+    )
+    link = _mk_link(
+        wbs_id="6", linear_id="MS-abc-123", snapshot=snap,
+    )
+    issue = CpInputIssue(
+        linear_id="MS-abc-123",
+        title="v1.0 launch",
+        is_milestone=True,
+        # Linear's milestone has no labels → derived team is empty.
+    )
+    diff = compute_sync_diff(
+        program="TEST",
+        workbook_tasks=[task],
+        existing_links=[link],
+        current_linear=_mk_payload([issue]),
+    )
+    row = diff.rows[0]
+    # team field protected → no entry in field_changes at all.
+    assert all(c.field != "team" for c in row.field_changes)
+
+
+def test_milestone_row_protects_all_seven_workbook_fields():
+    """Sanity sweep: every protected field that would otherwise produce a
+    diff entry on a regular row is silently skipped on a milestone row."""
+    # Workbook has values for every field; Linear has different values.
+    # On a regular row, all 7 would show as diffs (push/pull/conflict).
+    # On a milestone row, none should appear.
+    snap = IssueSnapshot(
+        title="v1.0 launch",
+        assignee="alex@x", estimate="5", state="Not Started",
+        blockedby="JAS-3", parent="JAS-1", team="PM", milestone="MS-other",
+    )
+    task = Task(
+        id="6", level=1, name="v1.0 launch",
+        owner="bob@x", team="FIN", duration=99,
+        status="In Progress", milestone=True,
+    )
+    link = _mk_link(wbs_id="6", linear_id="MS-zzz", snapshot=snap)
+    issue = CpInputIssue(
+        linear_id="MS-zzz", title="v1.0 launch", is_milestone=True,
+        # Differing Linear values on every protected field:
+        assignee="charlie@x", estimate_days=2, state="Done",
+        parent_linear_id="JAS-99", milestone_id="MS-different",
+    )
+    diff = compute_sync_diff(
+        program="TEST",
+        workbook_tasks=[task],
+        existing_links=[link],
+        current_linear=_mk_payload([issue]),
+    )
+    row = diff.rows[0]
+    changed_fields = {c.field for c in row.field_changes}
+    # None of the protected fields appear:
+    assert changed_fields.isdisjoint(MILESTONE_WORKBOOK_PROTECTED)
+
+
+def test_milestone_row_still_merges_title_and_due_date():
+    """Protection only covers fields with no Linear API surface. `title`
+    (→ milestone.name) and `due_date` (→ milestone.targetDate) still
+    round-trip normally on milestone rows."""
+    snap = IssueSnapshot(title="v1.0 launch", due_date="2026-06-01")
+    task = Task(
+        id="6", level=1, name="v1.0 launch (renamed)",  # workbook renamed
+        duration=0, milestone=True, end=date(2026, 6, 15),
+    )
+    link = _mk_link(wbs_id="6", linear_id="MS-abc", snapshot=snap)
+    issue = CpInputIssue(
+        linear_id="MS-abc", title="v1.0 launch", is_milestone=True,
+        end_anchor=date(2026, 6, 1),  # Linear unchanged from snapshot
+    )
+    diff = compute_sync_diff(
+        program="TEST",
+        workbook_tasks=[task],
+        existing_links=[link],
+        current_linear=_mk_payload([issue]),
+    )
+    row = diff.rows[0]
+    title_change = next(c for c in row.field_changes if c.field == "title")
+    due_change = next(c for c in row.field_changes if c.field == "due_date")
+    assert title_change.classification == FieldClassification.PUSH
+    assert title_change.resolved_to_value == "v1.0 launch (renamed)"
+    assert due_change.classification == FieldClassification.PUSH
+    assert due_change.resolved_to_value == "2026-06-15"
+
+
+def test_non_milestone_row_still_merges_team_normally():
+    """Sanity: protection only applies on milestone rows. Regular linked
+    rows still merge the full MERGEABLE_FIELDS set including team."""
+    snap = IssueSnapshot(title="Spec optics", team="PM")
+    task = Task(
+        id="1", level=1, name="Spec optics", team="PM",
+        duration=2, status="In Progress",
+    )
+    link = _mk_link(wbs_id="1", linear_id="IBO-5", snapshot=snap)
+    # Linear flipped the label → derived team is now QA.
+    payload = CpInput(
+        project=CpInputProject(name="TEST", source="linear"),
+        config=CpInputConfig(
+            default_duration_days=1,
+            today=date(2026, 5, 18),
+            linear_team_label_map={"PM": "IBO:PM", "QA": "ENG:QA"},
+        ),
+        issues=[CpInputIssue(
+            linear_id="IBO-5", title="Spec optics",
+            state="In Progress", estimate_days=2,
+            labels=["ENG:QA"],
+        )],
+        edges=[],
+    )
+    diff = compute_sync_diff(
+        program="TEST",
+        workbook_tasks=[task],
+        existing_links=[link],
+        current_linear=payload,
+    )
+    team_change = next(c for c in diff.rows[0].field_changes if c.field == "team")
+    assert team_change.classification == FieldClassification.PULL
+    assert team_change.resolved_to_value == "QA"

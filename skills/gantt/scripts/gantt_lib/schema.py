@@ -103,10 +103,14 @@ COL_MILESTONE_LETTER = "L"
 
 # Sheets API uses 0-based indices in batch_update payloads.
 COL_NAME_IDX = 2
+COL_OWNER_IDX = 3
 COL_TEAM_IDX = 4
+COL_START_IDX = 5
+COL_END_IDX = 6
 COL_DURATION_IDX = 7
 COL_PERCENT_IDX = 8
 COL_STATUS_IDX = 9
+COL_PREDECESSORS_IDX = 10
 COL_MILESTONE_IDX = 11
 COL_MILESTONE_LINK_IDX = 12
 COL_NOTES_IDX = 13
@@ -456,26 +460,45 @@ def milestone_row_grey_out_cf_request(
     sheet_id: int,
     extra_col_idxs: tuple[int, ...] = (),
 ) -> dict:
-    """Conditional formatting: grey out fields that don't apply to
-    milestone rows.
+    """Conditional formatting: grey out fields that don't round-trip with
+    Linear on milestone rows.
 
-    A milestone is a zero-duration marker. On rows where `Milestone?`
-    (col L) is checked, the following fields are meaningless and
-    shouldn't be edited:
+    Linear's `ProjectMilestone` exposes only three workbook-syncable
+    fields: `name` (col C — Name), `targetDate` (col G — End), and
+    `description` (col N — Notes, not yet wired). Everything else on a
+    milestone row is workbook-local — no Linear counterpart exists. The
+    grey signals "edit if you like, but Linear has no opinion."
 
-      - `Duration` (col H): always zero by definition
-      - `% Complete` (col I): binary (milestone is hit or not)
-      - `Milestone Link` (col M): a milestone shouldn't link to itself or
-        another milestone (Linear's milestones don't nest)
+    Sync protection: the merge engine treats the corresponding fields as
+    workbook-authoritative on milestone rows (see
+    `linear.merge.MILESTONE_WORKBOOK_PROTECTED`). Whatever you put in a
+    greyed cell stays — Linear can never clear it.
 
-    `extra_col_idxs` lets callers extend the greyed-out set (e.g. add
-    Predecessors on a per-program basis if the convention there is that
-    milestones don't carry predecessors).
+    Greyed columns:
+      - `Owner` (col D)        — no `assignee` on milestones
+      - `Team`  (col E)        — no `labels` on milestones
+      - `Start` (col F)        — no start field on milestones
+      - `Duration` (col H)     — no `estimate` on milestones
+      - `% Complete` (col I)   — milestone is hit-or-not, not %
+      - `Status` (col J)       — derived from member issues in Linear
+      - `Milestone Link` (col M) — milestones can't nest
+      - `Notes` (col N)        — `description` sync not wired yet
+
+    Predecessors (col K) is intentionally NOT greyed: it doubles as the
+    milestone-membership editor — `<wbs>FS` entries become `issue.milestone`
+    membership pushes on next sync.
+
+    `extra_col_idxs` lets callers extend the greyed set.
     """
     cols = (
+        COL_OWNER_IDX,
+        COL_TEAM_IDX,
+        COL_START_IDX,
         COL_DURATION_IDX,
         COL_PERCENT_IDX,
+        COL_STATUS_IDX,
         COL_MILESTONE_LINK_IDX,
+        COL_NOTES_IDX,
         *extra_col_idxs,
     )
     # Sheets stores the checkbox as the boolean TRUE; `=$L5=TRUE` matches.
@@ -523,11 +546,15 @@ def linked_workbook_only_grey_out_cf_request(
     workbook-local — editing it has no effect on Linear." Cells stay
     fully editable; this is a cosmetic cue only.
 
-    `extra_col_idxs` lets callers extend the greyed-out set with
-    additional column indices (e.g. include Team via COL_TEAM_IDX
-    until PR3 wires teams via Linear labels).
+    Greyed columns (the workbook-only fields on any linked row):
+      - `Start` (col F)       — Linear's `startedAt` is derived (set when
+        the issue enters a `started` state); workbook pushes are no-ops
+      - `% Complete` (col I)  — Linear doesn't carry %complete
+      - `Notes` (col N)       — `issue.description` sync not wired yet
+
+    `extra_col_idxs` lets callers extend the greyed set.
     """
-    cols = (COL_PERCENT_IDX, COL_NOTES_IDX, *extra_col_idxs)
+    cols = (COL_START_IDX, COL_PERCENT_IDX, COL_NOTES_IDX, *extra_col_idxs)
     formula = f"=ISFORMULA(${COL_NAME_LETTER}{FIRST_TASK_ROW})"
     ranges = [
         {

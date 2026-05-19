@@ -79,6 +79,24 @@ MERGEABLE_FIELDS: tuple[str, ...] = (
     "milestone",
 )
 
+# Fields the 3-way merge SKIPS on milestone rows because Linear's
+# `ProjectMilestone` entity has no corresponding API surface. The
+# workbook stays authoritative — whatever the user puts in these cells
+# survives sync, since Linear can never clear or change them. This is
+# the load-bearing half of the visual grey-out on milestone rows.
+#
+# Round-trippable on milestone rows: `title` (→ milestone.name) and
+# `due_date` (→ milestone.targetDate). Everything else is sidecar.
+MILESTONE_WORKBOOK_PROTECTED: frozenset[str] = frozenset({
+    "assignee",   # no assignee on milestones
+    "estimate",   # no estimate on milestones
+    "state",      # derived in Linear from member-issue completion
+    "blockedby",  # no relations on milestones
+    "parent",     # no parentId on milestones
+    "team",       # no labels on milestones
+    "milestone",  # milestone rows aren't members of themselves
+})
+
 # Default-policy field winners on true conflict. Per the spec table:
 LINEAR_WINS: frozenset[str] = frozenset({
     "title", "state", "state_type", "assignee", "due_date", "parent", "milestone", "team",
@@ -311,14 +329,25 @@ def _merge_row(
     stored_snapshot: IssueSnapshot,
     linear_snapshot: IssueSnapshot,
     title_for_display: str,
+    is_milestone: bool = False,
 ) -> SyncRowDiff:
     """Run the 3-way merge over MERGEABLE_FIELDS for one linked issue.
     Returns a SyncRowDiff with action=update if anything changed, else
-    action=unchanged."""
+    action=unchanged.
+
+    On milestone rows (`is_milestone=True`), fields in
+    `MILESTONE_WORKBOOK_PROTECTED` are skipped entirely — Linear's
+    `ProjectMilestone` has no corresponding field, so the workbook is
+    authoritative. This is the load-bearing half of the visual grey-out
+    on milestone rows.
+    """
+    protected = MILESTONE_WORKBOOK_PROTECTED if is_milestone else frozenset()
     field_changes: list[FieldChange] = []
     conflicts: list[str] = []
 
     for fname in MERGEABLE_FIELDS:
+        if fname in protected:
+            continue
         equality_fn = FIELD_EQUALITY.get(fname, operator.eq)
         W = getattr(workbook_snapshot, fname)
         S = getattr(stored_snapshot, fname)
@@ -451,6 +480,12 @@ def compute_sync_diff(
             team_label_map=current_linear.config.linear_team_label_map,
         )
         stored_snap = sync_fields_to_snapshot(link)
+        # Milestone-row detection: synthetic `MS-<uuid>` linear_ids are
+        # the canonical signal (the agent's normalization always produces
+        # them for project milestones). Falling back to `task.is_milestone`
+        # would cover hand-flagged workbook rows but those have no
+        # corresponding Linear milestone to merge against anyway.
+        is_milestone = link.linear_id.startswith("MS-") or bool(task.milestone)
         rows.append(_merge_row(
             wbs_id=link.wbs_id,
             linear_id=link.linear_id,
@@ -458,6 +493,7 @@ def compute_sync_diff(
             stored_snapshot=stored_snap,
             linear_snapshot=linear_snap,
             title_for_display=task.name,
+            is_milestone=is_milestone,
         ))
 
     # 2) Workbook tasks without a sync link — create in Linear.

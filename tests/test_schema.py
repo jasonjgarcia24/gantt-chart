@@ -347,12 +347,14 @@ def test_weekend_cf_excludes_quarter_and_month_header_rows():
 
 
 def test_linked_workbook_only_grey_out_cf_default_columns():
-    """Grey-out CF must cover %Complete and Notes by default — the two
-    workbook-only fields that have no Linear counterpart and won't sync."""
+    """Grey-out CF covers the three workbook-only fields on linked rows:
+    Start (Linear `startedAt` is derived), %Complete (no Linear field),
+    and Notes (`issue.description` sync not wired)."""
+    from gantt_lib.schema import COL_START_IDX
     req = linked_workbook_only_grey_out_cf_request(sheet_id=42)
     rule = req["addConditionalFormatRule"]["rule"]
     col_starts = sorted(r["startColumnIndex"] for r in rule["ranges"])
-    assert col_starts == [COL_PERCENT_IDX, COL_NOTES_IDX]
+    assert col_starts == sorted([COL_START_IDX, COL_PERCENT_IDX, COL_NOTES_IDX])
     for r in rule["ranges"]:
         assert r["sheetId"] == 42
         assert r["startRowIndex"] == HEADER_ROWS  # task region only, not headers
@@ -391,17 +393,39 @@ def test_linked_workbook_only_grey_out_cf_accepts_extra_columns():
 # ---------- milestone-row grey-out CF ----------
 
 
-def test_milestone_row_grey_out_cf_targets_duration_percent_milestone_link():
-    """Greys out fields that don't apply to milestone rows: Duration (H),
-    % Complete (I), Milestone Link (M)."""
+def test_milestone_row_grey_out_cf_targets_all_non_milestone_fields():
+    """Greys out every workbook field that has no `ProjectMilestone`
+    counterpart in Linear. Round-trippable fields stay un-greyed: Name
+    (col C → milestone.name), End (col G → milestone.targetDate), and
+    Predecessors (col K — doubles as the milestone-membership editor).
+    """
+    from gantt_lib.schema import (
+        COL_OWNER_IDX, COL_TEAM_IDX, COL_START_IDX, COL_STATUS_IDX,
+    )
     req = milestone_row_grey_out_cf_request(sheet_id=42)
     rule = req["addConditionalFormatRule"]["rule"]
     col_starts = sorted(r["startColumnIndex"] for r in rule["ranges"])
-    assert col_starts == sorted([COL_DURATION_IDX, COL_PERCENT_IDX, COL_MILESTONE_LINK_IDX])
+    assert col_starts == sorted([
+        COL_OWNER_IDX, COL_TEAM_IDX, COL_START_IDX,
+        COL_DURATION_IDX, COL_PERCENT_IDX, COL_STATUS_IDX,
+        COL_MILESTONE_LINK_IDX, COL_NOTES_IDX,
+    ])
     for r in rule["ranges"]:
         assert r["sheetId"] == 42
         assert r["startRowIndex"] == HEADER_ROWS  # task region only
         assert r["endColumnIndex"] == r["startColumnIndex"] + 1
+
+
+def test_milestone_row_grey_out_cf_leaves_predecessors_editable():
+    """Predecessors (col K) is the milestone-membership editor — must
+    NOT be greyed even though milestones don't have blockedBy in Linear.
+    The sync engine reinterprets `<wbs>FS` entries as `issue.milestone`
+    membership pushes for the corresponding workbook tasks."""
+    from gantt_lib.schema import COL_PREDECESSORS_IDX
+    req = milestone_row_grey_out_cf_request(sheet_id=42)
+    rule = req["addConditionalFormatRule"]["rule"]
+    col_starts = [r["startColumnIndex"] for r in rule["ranges"]]
+    assert COL_PREDECESSORS_IDX not in col_starts
 
 
 def test_milestone_row_grey_out_cf_triggers_on_milestone_checkbox():

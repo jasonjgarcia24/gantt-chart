@@ -152,9 +152,15 @@ def test_apply_grey_out_cf_emits_addConditionalFormatRule_batch():
     ]
     assert len(cf_bodies) == 1
     rule = cf_bodies[0]["requests"][0]["addConditionalFormatRule"]["rule"]
-    # Greys % Complete + Notes (the workbook-only columns).
+    # Greys Start + %Complete + Notes — the three workbook-only columns
+    # on any linked row (Linear's startedAt is derived; %Complete + Notes
+    # have no Linear field).
     col_starts = sorted(r["startColumnIndex"] for r in rule["ranges"])
-    assert col_starts == [schema.COL_PERCENT_IDX, schema.COL_NOTES_IDX]
+    assert col_starts == sorted([
+        schema.COL_START_IDX,
+        schema.COL_PERCENT_IDX,
+        schema.COL_NOTES_IDX,
+    ])
 
 
 def test_apply_grey_out_cf_raises_on_v1_tab():
@@ -178,7 +184,9 @@ def test_apply_grey_out_cf_raises_on_missing_program():
 
 def test_apply_milestone_row_grey_out_cf_emits_addConditionalFormatRule_batch():
     """Patch path: a v2 tab gets one addConditionalFormatRule request
-    targeting Duration/%Complete/Milestone Link, triggered by Milestone? = TRUE."""
+    greying every field that has no `ProjectMilestone` counterpart in
+    Linear, triggered by Milestone? = TRUE. Predecessors (col K) stays
+    un-greyed — it doubles as the milestone-membership editor."""
     ss = FakeSpreadsheet()
     _seed_v2_tab(ss)
     apply_milestone_row_grey_out_cf(ss, "TPM90")
@@ -191,10 +199,16 @@ def test_apply_milestone_row_grey_out_cf_emits_addConditionalFormatRule_batch():
     rule = cf_bodies[0]["requests"][0]["addConditionalFormatRule"]["rule"]
     col_starts = sorted(r["startColumnIndex"] for r in rule["ranges"])
     assert col_starts == sorted([
+        schema.COL_OWNER_IDX,
+        schema.COL_TEAM_IDX,
+        schema.COL_START_IDX,
         schema.COL_DURATION_IDX,
         schema.COL_PERCENT_IDX,
+        schema.COL_STATUS_IDX,
         schema.COL_MILESTONE_LINK_IDX,
+        schema.COL_NOTES_IDX,
     ])
+    assert schema.COL_PREDECESSORS_IDX not in col_starts
     # Trigger references col L (Milestone?).
     formula = rule["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
     assert "$L" in formula and "TRUE" in formula
