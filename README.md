@@ -526,9 +526,10 @@ into JSON, and pipes to the CLI:
 <skill>/scripts/gantt linear-sync --stdin --as <program> [--dry-run] [--direction={pull,push,both}] [--force]
 ```
 
-Two aliases for convenience:
+Convenience alias:
 - `gantt linear-push` — same as `linear-sync --direction=push`
-- `gantt linear-pull` — Phase-1-compat read-only path (kept for prompts/tools that still target it)
+
+For read-only pull behavior use `linear-sync --direction=pull`.
 
 **Three-way merge**: every sync compares three values per field:
 
@@ -683,9 +684,8 @@ gantt-chart/
 │               │   ├── snapshot.py     # IssueSnapshot + 3-way merge equality helpers
 │               │   ├── merge.py        # 3-way merge engine (classify_field, compute_sync_diff)
 │               │   ├── push.py         # SyncDiff → MCPRequest descriptors (two-pass)
-│               │   ├── sync.py         # top-level orchestrator (pull + merge + push composed)
-│               │   └── pull.py         # Phase-1-compat pull orchestrator (read-only)
-│               └── linear_cmds.py      # cmd_linear_pull + cmd_linear_sync handlers
+│               │   └── sync.py         # top-level orchestrator (pull + merge + push composed)
+│               └── linear_cmds.py      # cmd_linear_sync handler
 ├── tests/
 │   ├── test_model.py
 │   ├── test_dsl.py
@@ -712,8 +712,6 @@ gantt-chart/
 │   ├── test_linear_merge.py    # 3-way merge engine (8 scenarios)
 │   ├── test_linear_push.py     # SyncDiff → MCPRequest descriptors (two-pass)
 │   ├── test_linear_sync.py     # top-level sync orchestrator (3 directions + dry-run + force)
-│   ├── test_linear_pull.py     # Phase-1-compat pull (5 fixtures)
-│   ├── test_linear_cmds.py     # cmd_linear_pull handler
 │   ├── test_linear_cmds_sync.py # cmd_linear_sync handler
 │   └── fixtures/
 │       ├── programs.py         # shared Program factories
@@ -721,7 +719,6 @@ gantt-chart/
 │       ├── fake_workbook.py    # in-memory gspread fakes
 │       ├── fake_slides.py      # Slides + Drive API fakes
 │       ├── cp/                 # cp engine fixtures (6 JSON inputs)
-│       ├── linear_pull/        # pull-orchestrator fixtures (5 JSON inputs)
 │       └── linear_mcp/         # captured real MCP responses (13 JSON snapshots; 8 read-side + 5 write-side)
 └── docs/
     ├── ideas/gantt-skill-v0.5.md

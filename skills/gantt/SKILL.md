@@ -91,9 +91,9 @@ for workbook-only tasks, or archive Linear issues for deleted workbook
 rows — route to this mode. After the sync, the workbook and Linear
 agree per the 3-way merge conflict policy.
 
-`gantt linear-sync <program>` is the primary entry point. The
-Phase-1 `gantt linear-pull <program>` still works (read-only pull) as
-a backwards-compat alias for the pull-direction-only path.
+`gantt linear-sync <program>` is the only entry point. For read-only
+behavior pass `--direction=pull`; the standalone Phase-1 `linear-pull`
+command was removed once Phase 2 fully covered its semantics.
 
 ### Trigger language
 
@@ -127,7 +127,7 @@ Linear" → `--direction=push`. "what's different" → `--dry-run` (no apply).
 
 Use the `claude_ai_Linear` MCP (must be installed + authenticated in
 Claude Code; if it isn't, tell the user and stop). For sync, every
-invocation starts with the same read sequence as Phase-1 pull:
+invocation starts with this read sequence:
 
 1. `mcp__claude_ai_Linear__list_teams()` — cache for the session
 2. `mcp__claude_ai_Linear__list_projects(team=<team>, query=<name-or-slug>)` — resolve project ID
@@ -202,7 +202,7 @@ Build the JSON payload that the CLI expects. Field-by-field:
 | `config.default_duration_days` | `1` | Or whatever the user prefers; surface in dry-run |
 | `config.today` | today's ISO date | Used to anchor issues with no blockers + no startedAt |
 | `config.estimate_to_days.ratio` | `1.0` for points→days | Detect unit from issue `estimate.name` |
-| `config.linear_team` | the team name from `list_teams` (e.g. `"JasonGarcia"`) | **Required for Phase-2 create**. Empty string in Phase-1 pull-only mode |
+| `config.linear_team` | the team name from `list_teams` (e.g. `"JasonGarcia"`) | **Required for create operations**. Empty string when not creating anything new |
 | `config.linear_project` | the project name from `list_projects` | **Required for Phase-2 create** |
 | `config.linear_archive_state` | first state of `type=="canceled"` from `list_issue_statuses` (e.g. `"Canceled"`) | **Required for Phase-2 archive**. If empty, archive requests are silently skipped |
 | `config.linear_team_label_map` | `{workbook_team_name: linear_label_name}` dict — populate from user-supplied mapping or workbook config | **Optional**. Enables Team ↔ Linear-labels bidirectional sync. Empty `{}` disables team sync (workbook Team becomes a sidecar-only field). |
@@ -287,9 +287,8 @@ Primary verb (Phase 2):
 <skill-base-dir>/scripts/gantt linear-sync --stdin --as <program> [--dry-run] [--direction={pull,push,both}] [--force]
 ```
 
-Aliases:
+Alias:
 - `gantt linear-push --stdin --as <program>` — same as `linear-sync --direction=push`
-- `gantt linear-pull --stdin --as <program>` — Phase-1-compat path; calls the legacy pull orchestrator (still works, simpler JSON shape without `mcp_requests`)
 
 Capture stdout (JSON) separately from stderr (result line). Result line
 goes at the top of your response verbatim.
@@ -368,7 +367,7 @@ Every `gantt` command prints a verified line that starts with `gantt:` and ends 
 ## Things this skill does NOT do
 
 - **Fuzzy task lookup by name** — always ask the user for the WBS id when ambiguous.
-- **Linear** — `gantt linear-sync` (full bidirectional: pull + push + create + archive) and `gantt linear-pull` (read-only pull, Phase-1-compat) are both supported via the Linear MCP. See the Linear MCP sync mode section above.
+- **Linear** — `gantt linear-sync` (full bidirectional: pull + push + create + archive; use `--direction=pull` for read-only) is supported via the Linear MCP. See the Linear MCP sync mode section above.
 - **Jira / Asana / Trello sync** — out of scope.
 - **Multi-PM concurrent edit reconciliation** — single-writer model. If another PM edits the sheet, re-run `recalc` to re-cascade.
 - **Sub-day granularity, per-team calendars, multiple critical paths** — single critical path only; days only.
