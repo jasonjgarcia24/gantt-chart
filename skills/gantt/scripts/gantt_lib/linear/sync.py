@@ -266,17 +266,19 @@ def _apply_pull_writes(
         if row_idx is not None:
             sheets.update_task_data(program_ws, row_idx, task)
 
-    # 2) pull_new: append fresh Task with assigned WBS id.
+    # 2) pull_new: append fresh Tasks with assigned WBS ids that honor
+    # parent_linear_id (so Linear sub-issues land as level-N+1 children
+    # under the parent's WBS, e.g. "2.1" instead of next-free top-level).
+    pull_new_wbs = _assign_wbs_for_pull_new(payload, existing_links)
     for row in diff.rows:
         if row.action != "pull_new":
             continue
         issue = issue_by_linear.get(row.linear_id)
         if issue is None:
             continue
-        # Assign next-free top-level WBS id (sub-issues handled via parent
-        # in cp/adapter on initial pull, but for mid-sync pull_new we
-        # default to top-level).
-        new_wbs = next_wbs_id(workbook_tasks)
+        new_wbs = pull_new_wbs.get(issue.linear_id) or next_wbs_id(workbook_tasks)
+        # Level = depth in the WBS hierarchy. "1" → 1, "2.1" → 2, "1.2.3" → 3.
+        level = 1 + new_wbs.count(".")
         # Anchor: mirror cp/adapter behavior — if no Linear startedAt
         # and no blockers, default to today so cascade doesn't refuse
         # the next recalc with UnanchoredError. Issues with blockers
@@ -285,7 +287,7 @@ def _apply_pull_writes(
         start = issue.start_anchor or payload.config.today
         new_task = Task(
             id=new_wbs,
-            level=1,
+            level=level,
             name=issue.title,
             owner=issue.assignee,
             duration=int(issue.estimate_days) if issue.estimate_days else 0,
@@ -302,6 +304,57 @@ def _apply_pull_writes(
         # Stash the assigned wbs back onto the SyncRowDiff so the caller
         # can write the corresponding sync_tab row.
         row.wbs_id = new_wbs
+
+
+def _assign_wbs_for_pull_new(
+    payload: CpInput, existing_links: list[SyncLink]
+) -> dict[str, str]:
+    """For each pull_new candidate (Linear issue with no existing link),
+    assign a WBS id that respects parent_linear_id. Existing-linked issues
+    keep their assigned WBS — new sub-issues nest underneath as
+    `<parent_wbs>.<next_sibling_int>`.
+
+    Returns `{linear_id: wbs_id}` covering only NEW assignments; callers
+    should fall back to `next_wbs_id` for any issue not in the map.
+    """
+    existing_by_linear = {l.linear_id: l.wbs_id for l in existing_links}
+    children: dict[Optional[str], list[CpInputIssue]] = {}
+    for iss in payload.issues:
+        children.setdefault(iss.parent_linear_id, []).append(iss)
+
+    assignments: dict[str, str] = dict(existing_by_linear)
+
+    def used_under(parent_wbs: Optional[str]) -> set[int]:
+        prefix = "" if parent_wbs is None else f"{parent_wbs}."
+        used: set[int] = set()
+        for wbs in assignments.values():
+            if not wbs.startswith(prefix):
+                continue
+            rest = wbs[len(prefix):]
+            if "." in rest:
+                continue
+            try:
+                used.add(int(rest))
+            except ValueError:
+                continue
+        return used
+
+    def assign(parent_linear: Optional[str], parent_wbs: Optional[str]) -> None:
+        for iss in children.get(parent_linear, []):
+            if iss.linear_id in existing_by_linear:
+                wbs = existing_by_linear[iss.linear_id]
+            else:
+                used = used_under(parent_wbs)
+                next_n = (max(used) + 1) if used else 1
+                wbs = str(next_n) if parent_wbs is None else f"{parent_wbs}.{next_n}"
+                assignments[iss.linear_id] = wbs
+            assign(iss.linear_id, wbs)
+
+    assign(None, None)
+    return {
+        lid: wbs for lid, wbs in assignments.items()
+        if lid not in existing_by_linear
+    }
 
 
 def _apply_field_to_task(task: Task, field_name: str, value: Any) -> None:

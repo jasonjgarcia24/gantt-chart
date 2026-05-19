@@ -25,6 +25,7 @@ from gantt_lib.linear.sync import (
     ProgramTabMissingError,
     SyncResult,
     _apply_milestone_to_task,
+    _assign_wbs_for_pull_new,
     _augment_predecessors_from_linear,
     sync,
 )
@@ -456,3 +457,67 @@ def test_apply_milestone_unresolvable_preserves_existing_link():
         wbs_by_linear={"MS-abc": "5"},  # MS-unknown not present
     )
     assert task.milestone_link == "5"  # unchanged
+
+
+# --- _assign_wbs_for_pull_new (parent-honoring WBS assignment) -------------
+
+
+def test_assign_wbs_top_level_sequential():
+    """No parent_linear_id → top-level WBS 1, 2, 3."""
+    payload = _mk_payload([
+        CpInputIssue(linear_id="A", title="A"),
+        CpInputIssue(linear_id="B", title="B"),
+        CpInputIssue(linear_id="C", title="C"),
+    ])
+    out = _assign_wbs_for_pull_new(payload, existing_links=[])
+    assert out == {"A": "1", "B": "2", "C": "3"}
+
+
+def test_assign_wbs_sub_issues_nest_under_parent():
+    """A child of parent IBO-6 (top-level WBS 2) gets WBS 2.1 not 4."""
+    payload = _mk_payload([
+        CpInputIssue(linear_id="IBO-5", title="Spec optics"),
+        CpInputIssue(linear_id="IBO-6", title="Eyepiece fab"),
+        CpInputIssue(linear_id="IBO-7", title="Doc revision"),
+        CpInputIssue(linear_id="IBO-8", title="Eyepiece QA",
+                     parent_linear_id="IBO-6"),
+    ])
+    out = _assign_wbs_for_pull_new(payload, existing_links=[])
+    assert out == {
+        "IBO-5": "1",
+        "IBO-6": "2",
+        "IBO-7": "3",
+        "IBO-8": "2.1",  # nested under IBO-6
+    }
+
+
+def test_assign_wbs_existing_links_preserved_and_omitted_from_output():
+    """Issues already in existing_links keep their assigned WBS (and
+    are not re-emitted in the output dict). New siblings/children pick
+    up the next free integer."""
+    payload = _mk_payload([
+        CpInputIssue(linear_id="IBO-5", title="Spec optics"),
+        CpInputIssue(linear_id="IBO-6", title="Eyepiece fab"),
+        CpInputIssue(linear_id="IBO-NEW", title="A new sibling"),
+    ])
+    existing = [
+        SyncLink(program="TEST", wbs_id="1", linear_id="IBO-5", last_synced=""),
+        SyncLink(program="TEST", wbs_id="2", linear_id="IBO-6", last_synced=""),
+    ]
+    out = _assign_wbs_for_pull_new(payload, existing_links=existing)
+    # IBO-5 + IBO-6 are not in the output (already linked).
+    assert "IBO-5" not in out
+    assert "IBO-6" not in out
+    # IBO-NEW gets WBS 3 (next free top-level).
+    assert out == {"IBO-NEW": "3"}
+
+
+def test_assign_wbs_chain_of_new_parents_and_children():
+    """New parent + new child: both get assigned in topological order."""
+    payload = _mk_payload([
+        CpInputIssue(linear_id="P", title="parent"),
+        CpInputIssue(linear_id="C1", title="child 1", parent_linear_id="P"),
+        CpInputIssue(linear_id="C2", title="child 2", parent_linear_id="P"),
+    ])
+    out = _assign_wbs_for_pull_new(payload, existing_links=[])
+    assert out == {"P": "1", "C1": "1.1", "C2": "1.2"}
