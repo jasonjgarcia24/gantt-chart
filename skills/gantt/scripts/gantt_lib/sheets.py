@@ -454,6 +454,43 @@ def compute_row_groups(tasks_with_rows: list[tuple[Task, int]]) -> list[tuple[in
     return groups
 
 
+def refresh_row_groups(ss, ws) -> int:
+    """Rebuild Sheets row-grouping (the +/- gutter that lets the user
+    collapse children under their parent) from the current task hierarchy
+    on the program tab. Returns the number of groups created.
+
+    Reads current tasks (which include the level field), computes the
+    nested group ranges via `compute_row_groups`, deletes any existing
+    rowGroups on the sheet, and adds the freshly-computed ones in one
+    batch_update.
+
+    Assumes rows are already in WBS-sorted order on the sheet (children
+    directly follow parents). For an unsorted tab, callers should sort
+    rows first.
+    """
+    pairs = read_program_tasks_with_rows(ws)
+    sorted_pairs = [(task, row_idx) for task, row_idx, _raw in pairs]
+
+    metadata = ss.fetch_sheet_metadata(params={"includeGridData": False})
+    target_sheet = next(
+        s for s in metadata["sheets"] if s["properties"]["sheetId"] == ws.id
+    )
+    existing_row_groups = target_sheet.get("rowGroups", [])
+    new_row_groups = compute_row_groups(sorted_pairs)
+
+    requests = []
+    for g in existing_row_groups:
+        rng = g["range"]
+        requests.append(schema.delete_row_group_request(
+            ws.id, rng["startIndex"], rng["endIndex"],
+        ))
+    for start, end in new_row_groups:
+        requests.append(schema.add_row_group_request(ws.id, start, end))
+    if requests:
+        ss.batch_update({"requests": requests})
+    return len(new_row_groups)
+
+
 def delete_task_row(ws, row: int) -> None:
     """Delete the entire row from the sheet. Sheets auto-shifts row references in formulas."""
     ws.delete_rows(row)

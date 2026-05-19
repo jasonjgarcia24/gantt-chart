@@ -319,6 +319,19 @@ def _apply_pull_writes(
         # can write the corresponding sync_tab row.
         row.wbs_id = new_task.id
 
+    # 3) Refresh Sheets row-grouping (+/- gutter) so sub-issues are
+    # collapsible under their parent. Only fires if any pull_new ran;
+    # update-only syncs leave existing groups intact. Best-effort —
+    # silently skips on API errors so a transient Sheets glitch doesn't
+    # abort an otherwise-successful sync.
+    if pull_new_rows_sorted:
+        try:
+            ss = getattr(program_ws, "spreadsheet", None)
+            if ss is not None:
+                sheets.refresh_row_groups(ss, program_ws)
+        except Exception:
+            pass
+
 
 def _build_pull_new_tasks(
     *,
