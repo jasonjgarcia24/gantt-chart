@@ -486,6 +486,22 @@ def cmd_program_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_program_patch_greyout_cf(args: argparse.Namespace) -> int:
+    """Retro-patch the workbook-only grey-out CF rule onto an existing
+    program tab. New programs already get it at create time; this is
+    the one-off path for tabs that predate PR2."""
+    from gantt_lib import schema, sheets
+
+    ss = _open_workbook()
+    try:
+        sheets.apply_grey_out_cf(ss, args.name)
+    except schema.ProgramTabSchemaError as e:
+        die(str(e))
+
+    ok(f"program {args.name} patch-greyout-cf — grey-out CF rule added")
+    return 0
+
+
 def cmd_program_migrate_schema(args: argparse.Namespace) -> int:
     """Upgrade an existing program tab from v1 (13-col) to v2 (14-col,
     adds Milestone Link). Idempotent — no-op on v2 tabs."""
@@ -1149,6 +1165,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pms.add_argument("name", help="program short name (the P_<name> tab to migrate)")
     p_pms.set_defaults(func=cmd_program_migrate_schema)
+
+    p_pgo = p_program_sub.add_parser(
+        "patch-greyout-cf",
+        help="retro-patch the workbook-only grey-out CF rule onto an existing tab",
+    )
+    p_pgo.add_argument("name", help="program short name (the P_<name> tab to patch)")
+    p_pgo.set_defaults(func=cmd_program_patch_greyout_cf)
 
     # ---------- task add / update / delete ----------
 

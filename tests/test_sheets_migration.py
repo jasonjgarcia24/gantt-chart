@@ -9,7 +9,10 @@ from __future__ import annotations
 import pytest
 
 from gantt_lib import schema
-from gantt_lib.sheets import migrate_program_tab_v1_to_v2
+from gantt_lib.sheets import (
+    apply_grey_out_cf,
+    migrate_program_tab_v1_to_v2,
+)
 from tests.fixtures.fake_workbook import FakeSpreadsheet, FakeWorksheet
 
 
@@ -128,3 +131,41 @@ def test_migrate_is_idempotent_after_first_upgrade():
     second = migrate_program_tab_v1_to_v2(ss, "TPM90")
     assert first == "v2"
     assert second == "v2"
+
+
+# --- apply_grey_out_cf ------------------------------------------------------
+
+
+def test_apply_grey_out_cf_emits_addConditionalFormatRule_batch():
+    """Patch path: a v2 tab gets one addConditionalFormatRule request
+    targeting the workbook-only-grey-out rule shape."""
+    ss = FakeSpreadsheet()
+    _seed_v2_tab(ss)
+    apply_grey_out_cf(ss, "TPM90")
+
+    # Find the batch_update body for the patch (skip any from the seed).
+    cf_bodies = [
+        b for b in ss.batch_updates
+        if any("addConditionalFormatRule" in req for req in b.get("requests", []))
+    ]
+    assert len(cf_bodies) == 1
+    rule = cf_bodies[0]["requests"][0]["addConditionalFormatRule"]["rule"]
+    # Greys % Complete + Notes (the workbook-only columns).
+    col_starts = sorted(r["startColumnIndex"] for r in rule["ranges"])
+    assert col_starts == [schema.COL_PERCENT_IDX, schema.COL_NOTES_IDX]
+
+
+def test_apply_grey_out_cf_raises_on_v1_tab():
+    """Grey-out formula assumes v2 column positions (Notes at idx 13).
+    On a v1 tab Notes is still at idx 12, so the rule would target the
+    wrong column. Force the caller to migrate first."""
+    ss = FakeSpreadsheet()
+    _seed_v1_tab(ss)
+    with pytest.raises(schema.ProgramTabSchemaError, match="migrate-schema"):
+        apply_grey_out_cf(ss, "TPM90")
+
+
+def test_apply_grey_out_cf_raises_on_missing_program():
+    ss = FakeSpreadsheet()
+    with pytest.raises(schema.ProgramTabSchemaError, match="not found"):
+        apply_grey_out_cf(ss, "NOPE")

@@ -201,6 +201,43 @@ def migrate_program_tab_v1_to_v2(ss, program_name: str) -> str:
     return "v2"
 
 
+def apply_grey_out_cf(ss, program_name: str) -> None:
+    """Add the `linked_workbook_only_grey_out_cf_request` rule to an
+    existing program tab. New programs already get this rule at create
+    time (PR2); this function retro-patches it onto tabs that predate
+    PR2 (LINEAR_TEST, TPM90, Tahoma).
+
+    Requires v2 schema — the grey-out formula assumes the post-PR2b
+    column layout (% Complete at idx 8, Notes at idx 13). Raises
+    ProgramTabSchemaError on v1 tabs so the caller migrates first.
+
+    NOT idempotent: re-running adds duplicate CF rules (cosmetic only —
+    they evaluate to the same colour, but they clutter the rule list).
+    Designed for one-off retro-patch use.
+    """
+    tab_name = schema.program_tab_name(program_name)
+    try:
+        ws = ss.worksheet(tab_name)
+    except Exception as e:
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} not found (tab {tab_name!r})"
+        ) from e
+
+    header_row = ws.get_values("A4:O4")
+    header_cells = header_row[0] if header_row else []
+    version = schema.detect_program_tab_schema(header_cells)
+    if version != "v2":
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} is on {version!r} schema; grey-out CF "
+            "assumes v2 column layout. Run `gantt program migrate-schema "
+            f"{program_name}` first."
+        )
+
+    ss.batch_update({
+        "requests": [schema.linked_workbook_only_grey_out_cf_request(ws.id)],
+    })
+
+
 def update_task_data(ws, row: int, task: Task) -> None:
     """Overwrite cols A..M for the given row with the task's data fields.
 
