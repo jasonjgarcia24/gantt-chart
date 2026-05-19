@@ -207,6 +207,49 @@ def test_workbook_task_to_snapshot_derives_parent_from_wbs_hierarchy():
     assert snap.parent == "JAS-100"
 
 
+def test_workbook_task_to_snapshot_translates_milestone_link():
+    """Task with milestone_link='5' (pointing at the milestone row's WBS)
+    serializes to the milestone row's linear_id 'MS-abc' in the snapshot
+    so the 3-way merge can compare directly to Linear's milestone_id."""
+    tasks = [
+        Task(id="1", level=1, name="Sub", duration=2, milestone_link="5"),
+        Task(id="5", level=1, name="v1 launch", duration=0, milestone=True),
+    ]
+    snap = workbook_task_to_snapshot(
+        tasks[0],
+        linear_by_wbs={"5": "MS-abc"},
+        workbook_tasks=tasks,
+    )
+    assert snap.milestone == "MS-abc"
+
+
+def test_workbook_task_to_snapshot_milestone_blank_when_unlinked():
+    """milestone_link='' → snapshot.milestone == ''."""
+    task = Task(id="1", level=1, name="x", duration=2, milestone_link="")
+    snap = workbook_task_to_snapshot(
+        task, linear_by_wbs={}, workbook_tasks=[task],
+    )
+    assert snap.milestone == ""
+
+
+def test_cp_issue_to_snapshot_reads_milestone_id_from_issue():
+    """When milestone_id kwarg is omitted, snapshot is populated from
+    `issue.milestone_id` directly."""
+    issue = CpInputIssue(
+        linear_id="JAS-5", title="x",
+        milestone_id="MS-0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d",
+    )
+    snap = cp_issue_to_snapshot(issue, blockedby_ids=[])
+    assert snap.milestone == "MS-0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d"
+
+
+def test_cp_issue_to_snapshot_milestone_kwarg_overrides_issue():
+    """Explicit milestone_id kwarg overrides what's on the issue dataclass."""
+    issue = CpInputIssue(linear_id="JAS-5", title="x", milestone_id="MS-foo")
+    snap = cp_issue_to_snapshot(issue, blockedby_ids=[], milestone_id="MS-bar")
+    assert snap.milestone == "MS-bar"
+
+
 # --- cp_issue_to_snapshot translation ---------------------------------------
 
 

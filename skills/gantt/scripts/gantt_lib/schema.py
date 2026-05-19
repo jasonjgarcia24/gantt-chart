@@ -25,9 +25,66 @@ PROGRAM_TAB_PREFIX = "P_"
 DATA_HEADERS = [
     "ID", "Level", "Name", "Owner", "Team",
     "Start", "End", "Duration", "% Complete",
+    "Status", "Predecessors", "Milestone?", "Milestone Link", "Notes",
+]
+NUM_DATA_COLS = len(DATA_HEADERS)  # 14
+
+# v1 (pre-PR2b) schema header — 13 data cols, no Milestone Link.
+# Kept as a constant so the detection path can recognize old tabs and
+# raise a descriptive error instead of silently writing v2 rows into a
+# v1 layout (which would clobber the first timeline column + shift Notes
+# data into the new Milestone Link slot).
+_V1_DATA_HEADERS = [
+    "ID", "Level", "Name", "Owner", "Team",
+    "Start", "End", "Duration", "% Complete",
     "Status", "Predecessors", "Milestone?", "Notes",
 ]
-NUM_DATA_COLS = len(DATA_HEADERS)  # 13
+
+
+class ProgramTabSchemaError(ValueError):
+    """Raised when a program tab's header row doesn't match the current
+    schema. Carries a recovery hint pointing at the migration path."""
+
+
+def detect_program_tab_schema(header_row: list[str]) -> str:
+    """Return 'v2' (current), 'v1' (pre-PR2b 13-col), or 'unknown'.
+
+    Compares only the data-region columns (first NUM_DATA_COLS cells); any
+    timeline-column headers in the same row are ignored.
+    """
+    if not header_row:
+        return "unknown"
+    head = [c.strip() for c in header_row]
+    if head[:NUM_DATA_COLS] == DATA_HEADERS:
+        return "v2"
+    if head[:len(_V1_DATA_HEADERS)] == _V1_DATA_HEADERS:
+        return "v1"
+    return "unknown"
+
+
+def assert_program_tab_v2(header_row: list[str], program_name: str = "<program>") -> None:
+    """Raise ProgramTabSchemaError if `header_row` isn't the current
+    schema. Prevents silent corruption when a v1 tab gets v2 writes
+    (Milestone Link would land in the first timeline col, Notes would
+    shift to col M, etc.)."""
+    version = detect_program_tab_schema(header_row)
+    if version == "v2":
+        return
+    if version == "v1":
+        raise ProgramTabSchemaError(
+            f"Program tab for {program_name!r} is on the old v1 13-col schema "
+            f"(no Milestone Link column). Cannot safely apply v2 reads/writes — "
+            f"the column shift would corrupt the first timeline column. "
+            "Recover by running the program-tab schema migration (see "
+            "task #102) or, for unsynced programs, recreating the tab "
+            "via `gantt program new`."
+        )
+    raise ProgramTabSchemaError(
+        f"Program tab for {program_name!r} header row {header_row!r} does not "
+        f"match any known schema (expected v2: {DATA_HEADERS!r} or "
+        f"v1: {_V1_DATA_HEADERS!r}). Inspect the tab and either restore the "
+        "header row or recreate the program."
+    )
 
 # Sheet structure: 4 grouping/header rows above the task region.
 HEADER_ROWS = 4
@@ -50,11 +107,13 @@ COL_TEAM_IDX = 4
 COL_PERCENT_IDX = 8
 COL_STATUS_IDX = 9
 COL_MILESTONE_IDX = 11
-COL_NOTES_IDX = 12
-TIMELINE_FIRST_COL_IDX = 13  # column N
+COL_MILESTONE_LINK_IDX = 12
+COL_NOTES_IDX = 13
+TIMELINE_FIRST_COL_IDX = 14  # column O
 
 # Letter form for formulas.
 COL_NAME_LETTER = "C"
+COL_MILESTONE_LINK_LETTER = "M"
 
 TIMELINE_DAYS = 126          # calendar days of horizon (~18 weeks, Mon-Sun cells)
 TIMELINE_COL_PIXELS = 20     # narrow daily columns; status text overflows

@@ -73,7 +73,16 @@ def read_program_tasks_with_rows(ws) -> list[tuple[Task, int, list[str]]]:
     leading-space indentation already applied — or not, for tasks added before
     the indent feature shipped) against the expected indented form, and only
     write when they differ.
+
+    Validates the tab's header row before reading. Raises
+    `ProgramTabSchemaError` when the tab is on an older schema (v1, no
+    Milestone Link column) — prevents silent data corruption from the
+    PR2b column shift.
     """
+    header_row = ws.get_values("A4:O4")  # row 4 = data header row (post-PR2b: 14 cols + extras)
+    header_cells = header_row[0] if header_row else []
+    schema.assert_program_tab_v2(header_cells, program_name=getattr(ws, "title", "<unknown>"))
+
     last_col = schema.col_letter(schema.NUM_DATA_COLS)
     rng = ws.get_values(f"A{FIRST_DATA_ROW}:{last_col}")
     out: list[tuple[Task, int, list[str]]] = []

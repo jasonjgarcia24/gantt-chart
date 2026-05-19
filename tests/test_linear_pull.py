@@ -62,14 +62,15 @@ def _load(name: str):
 
 def _mk_program_ws(ss: FakeSpreadsheet, program: str = "TEST") -> FakeWorksheet:
     """Create a minimal program tab in the fake workbook. Adds the 4
-    header rows so sheets.read_program_tasks reads from row 5 correctly."""
+    header rows so sheets.read_program_tasks reads from row 5 correctly.
+    Row 4 carries DATA_HEADERS so the schema-version validation in
+    read_program_tasks_with_rows passes."""
     tab_name = schema.program_tab_name(program)
     ws = ss.add_worksheet(title=tab_name, rows=200, cols=schema.NUM_DATA_COLS)
-    # Write 4 blank header rows so data starts at row 5.
     blank = [""] * schema.NUM_DATA_COLS
     ws.update(
         range_name="A1",
-        values=[blank, blank, blank, blank],
+        values=[blank, blank, blank, list(schema.DATA_HEADERS)],
         value_input_option="USER_ENTERED",
     )
     return ws

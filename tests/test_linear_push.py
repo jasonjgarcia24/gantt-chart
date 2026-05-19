@@ -476,3 +476,49 @@ def test_create_omits_labels_when_team_unmapped():
     )
     assert "labels" not in reqs[0].kwargs
 
+
+# --- milestone push ----------------------------------------------------------
+
+
+def test_milestone_push_strips_ms_prefix_for_save_issue():
+    """Workbook stores milestone link as 'MS-<uuid>'; Linear's save_issue
+    expects the raw UUID. Push must strip the prefix."""
+    row = _mk_update_row(field_changes=[
+        _fc("milestone",
+            "MS-0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d",
+            "",
+            "",
+            FieldClassification.PUSH,
+            "MS-0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d",
+            "workbook"),
+    ])
+    reqs = _build([row])
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {
+        "id": "JAS-5",
+        "milestone": "0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d",  # prefix stripped
+    }
+
+
+def test_milestone_push_empty_value_clears_link():
+    """Workbook cleared the milestone link → push milestone=None to
+    clear it in Linear."""
+    row = _mk_update_row(field_changes=[
+        _fc("milestone", "", "MS-abc", "MS-abc",
+            FieldClassification.PUSH, "", "workbook"),
+    ])
+    reqs = _build([row])
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "JAS-5", "milestone": None}
+
+
+def test_milestone_pull_emits_no_push():
+    """PULL means Linear changed the milestone; workbook applies the
+    change locally and we don't echo it back."""
+    row = _mk_update_row(field_changes=[
+        _fc("milestone", "MS-old", "MS-old", "MS-new",
+            FieldClassification.PULL, "MS-new", "linear"),
+    ])
+    reqs = _build([row])
+    assert reqs == []
+

@@ -35,6 +35,11 @@ def _make_workbook(
     if programs:
         for name, tasks in programs.items():
             ws = FakeWorksheet(schema.program_tab_name(name), sheet_id=hash(name) & 0xFFFFFF)
+            # Seed DATA_HEADERS on row 4 so the schema-version check passes.
+            ws.update(
+                range_name=f"A{schema.DAY_HEADER_ROW}",
+                values=[list(schema.DATA_HEADERS)],
+            )
             for i, t in enumerate(tasks):
                 ws.update(
                     range_name=f"A{schema.FIRST_TASK_ROW + i}",

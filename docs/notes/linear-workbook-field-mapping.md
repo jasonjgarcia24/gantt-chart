@@ -2,7 +2,7 @@
 
 Inventory of every field on both sides of the sync, what's currently wired, and where the gaps are.
 
-Last updated: 2026-05-18 (PR4: Predecessor DSL pull-augment preserves workbook lags/SS/SF).
+Last updated: 2026-05-18 (PR2b: Milestone bidirectional sync + visible Milestone Link column).
 
 Companion docs:
 - `linear-mcp-shapes.md` — read-side MCP payload shapes
@@ -96,7 +96,8 @@ Captured across `tests/fixtures/linear_mcp/save_issue_*.json` and `linear/snapsh
 | `Parent` (from WBS depth) | `parentId` | both | `LINEAR_WINS` | Computed from WBS hierarchy |
 | `End` | `dueDate` | both | `LINEAR_WINS` | Treated as the same field; goes through normal 3-way merge. Workbook cascade still owns End locally between syncs. |
 | `Linear URL` | `url` | pull only | n/a | Cached → `HYPERLINK` formula |
-| `Milestone?` (bool) | `milestone.id` | snapshot only | n/a | Captured for future Phase 2.1 |
+| `Milestone?` (bool) | (workbook-only) | n/a | n/a | Flag for milestone rows; not synced (Linear's milestone is a separate object, not a flag on issues) |
+| `Milestone Link` (wbs of milestone row) | `milestoneId` | both | `LINEAR_WINS` | Workbook stores the linked milestone row's WBS; push translates to `MS-<uuid>` linear_id → strips `MS-` prefix → sends to Linear. Pull translates Linear's `milestoneId` back to the workbook milestone row's WBS. |
 | `Team` | derived from `labels[]` via `linear_team_label_map` | both | `LINEAR_WINS` | Push replaces team-labels (preserves non-team labels like Bug/Feature); pull intersects issue.labels with map.values(). Empty map = team sync disabled. |
 
 ---
@@ -129,7 +130,7 @@ Captured across `tests/fixtures/linear_mcp/save_issue_*.json` and `linear/snapsh
 | Pair | Why excluded (Phase 2 v1) |
 |------|---------------------------|
 | `End` ↔ `dueDate` | **Now fully bidirectional (2026-05-18)**. User directive: keep it simple, treat them as the same field. Empty/clear on either side propagates. Workbook cascade still runs locally between syncs; on next sync, computed End re-establishes via PUSH if Linear hasn't moved it. |
-| `Milestone?` ↔ `milestone` | Lossy: workbook `bool` can't encode Linear milestone obj (title/progress/dates). Phase 2.1 adds milestone-id sidecar. |
+| `Milestone?` ↔ `milestone` | **Resolved in PR2b**: visible Milestone Link column added to program tab (col M); bidirectional sync via merge engine. Milestone rows themselves continue to sync via the existing `MS-<uuid>` linear_id convention. |
 | `Start` ↔ `startedAt` | Different semantics: workbook cascade-projected vs. Linear actual transition timestamp. Not directly mappable. |
 | `Predecessors` (DSL) ↔ `blockedBy` | **Asymmetric (PR4)**: push is lossy (DSL → flat blockedBy drops lags + SS/SF). Pull is *append-only* — Linear blockers not yet in the workbook DSL get added as bare `<wbs>FS` entries; existing lags/SS/SF are preserved; Linear-side removals are ignored. The workbook owns the rich relations layer. |
 

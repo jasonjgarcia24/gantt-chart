@@ -24,10 +24,13 @@ from gantt_lib.schema import (
     TIMELINE_DAYS,
     WEEK_HEADER_ROW,
     WORKBOOK_ONLY_GREY,
+    ProgramTabSchemaError,
+    assert_program_tab_v2,
     boundary_border_request,
     col_letter,
     day_row_format_request,
     default_team_color_cf_request,
+    detect_program_tab_schema,
     grouping_runs,
     hex_to_rgb01,
     linked_workbook_only_grey_out_cf_request,
@@ -48,11 +51,59 @@ def test_program_tab_name_uses_prefix():
     assert PROGRAM_TAB_PREFIX == "P_"
 
 
-def test_data_headers_match_v1_schema():
-    assert NUM_DATA_COLS == 13
+# ---------- program-tab schema detection ----------
+
+V1_HEADERS_FOR_TEST = [
+    "ID", "Level", "Name", "Owner", "Team",
+    "Start", "End", "Duration", "% Complete",
+    "Status", "Predecessors", "Milestone?", "Notes",
+]
+
+
+def test_detect_schema_v2_matches_current_data_headers():
+    assert detect_program_tab_schema(DATA_HEADERS) == "v2"
+
+
+def test_detect_schema_v2_ignores_trailing_timeline_cells():
+    """Header row in the sheet also carries day-of-month values past
+    NUM_DATA_COLS. Detection compares only the first NUM_DATA_COLS cells."""
+    row_with_timeline = list(DATA_HEADERS) + ["1", "2", "3"]
+    assert detect_program_tab_schema(row_with_timeline) == "v2"
+
+
+def test_detect_schema_v1_matches_old_13col_headers():
+    assert detect_program_tab_schema(V1_HEADERS_FOR_TEST) == "v1"
+
+
+def test_detect_schema_unknown_for_empty_or_mangled_row():
+    assert detect_program_tab_schema([]) == "unknown"
+    assert detect_program_tab_schema(["", "", "", ""]) == "unknown"
+    assert detect_program_tab_schema(["wrong", "labels", "here"]) == "unknown"
+
+
+def test_assert_v2_raises_on_v1_with_recovery_hint():
+    with pytest.raises(ProgramTabSchemaError, match="v1 13-col schema"):
+        assert_program_tab_v2(V1_HEADERS_FOR_TEST, program_name="TPM90")
+
+
+def test_assert_v2_raises_on_unknown_with_recovery_hint():
+    with pytest.raises(ProgramTabSchemaError, match="any known schema"):
+        assert_program_tab_v2(["", "", ""], program_name="TPM90")
+
+
+def test_assert_v2_passes_silently_on_current_schema():
+    # Should not raise.
+    assert_program_tab_v2(list(DATA_HEADERS), program_name="TPM90")
+
+
+def test_data_headers_match_v2_schema():
+    """v2 schema: 14 cols (added Milestone Link between Milestone? and Notes)."""
+    assert NUM_DATA_COLS == 14
     assert DATA_HEADERS[0] == "ID"
     assert DATA_HEADERS[9] == "Status"
     assert DATA_HEADERS[11] == "Milestone?"
+    assert DATA_HEADERS[12] == "Milestone Link"
+    assert DATA_HEADERS[13] == "Notes"
 
 
 def test_status_values_match_full_enum():
@@ -200,8 +251,8 @@ def test_wrap_strategy_request_sets_overflow_cell_on_timeline():
     assert rc["range"]["sheetId"] == 42
     # Applies to the task region only (header rows above are unaffected).
     assert rc["range"]["startRowIndex"] == HEADER_ROWS
-    assert rc["range"]["startColumnIndex"] == 13
-    assert rc["range"]["endColumnIndex"] == 18
+    assert rc["range"]["startColumnIndex"] == 14
+    assert rc["range"]["endColumnIndex"] == 19
     assert rc["cell"]["userEnteredFormat"]["wrapStrategy"] == "OVERFLOW_CELL"
     assert rc["fields"] == "userEnteredFormat.wrapStrategy"
 
@@ -218,8 +269,8 @@ def test_default_team_color_cf_matches_blank_team_cells():
     rng = rule["ranges"][0]
     assert rng["sheetId"] == 42
     assert rng["startRowIndex"] == HEADER_ROWS
-    assert rng["startColumnIndex"] == 13
-    assert rng["endColumnIndex"] == 18
+    assert rng["startColumnIndex"] == 14
+    assert rng["endColumnIndex"] == 19
 
     formula = rule["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
     # Must check both ISBLANK and ="" — gspread USER_ENTERED of "" writes
@@ -281,8 +332,8 @@ def test_weekend_cf_excludes_quarter_and_month_header_rows():
     assert rng["sheetId"] == 42
     # 0-indexed: row 2 = day row (DAY_HEADER_ROW=3 1-based).
     assert rng["startRowIndex"] == DAY_HEADER_ROW - 1
-    assert rng["startColumnIndex"] == 13
-    assert rng["endColumnIndex"] == 18
+    assert rng["startColumnIndex"] == 14
+    assert rng["endColumnIndex"] == 19
     formula = rule["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
     assert "WEEKDAY" in formula
     assert "$4" in formula  # DAY_HEADER_ROW = 4 with the new week-num row
@@ -358,8 +409,8 @@ def test_day_row_format_displays_date_as_day_only():
     assert rc["range"]["sheetId"] == 42
     assert rc["range"]["startRowIndex"] == DAY_HEADER_ROW - 1
     assert rc["range"]["endRowIndex"] == DAY_HEADER_ROW
-    assert rc["range"]["startColumnIndex"] == 13
-    assert rc["range"]["endColumnIndex"] == 18
+    assert rc["range"]["startColumnIndex"] == 14
+    assert rc["range"]["endColumnIndex"] == 19
     fmt = rc["cell"]["userEnteredFormat"]["numberFormat"]
     assert fmt["type"] == "DATE"
     assert fmt["pattern"] == "d"

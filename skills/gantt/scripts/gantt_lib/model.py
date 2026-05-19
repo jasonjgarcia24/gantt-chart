@@ -3,9 +3,10 @@
 Pure-Python — no Sheets dependency. The Sheets adapter layer (in the `gantt`
 script) calls Task.from_row / Task.to_row to round-trip a tab's data region.
 
-Column order, A-M, matches the v1-proposal schema:
+Column order, A-N (v2 schema — adds Milestone Link column):
     A id | B level | C name | D owner | E team | F start | G end | H duration
-    I percent_complete | J status | K predecessors | L milestone | M notes
+    I percent_complete | J status | K predecessors | L milestone
+    M milestone_link | N notes
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Iterable, Optional
 
-NUM_COLUMNS = 13
+NUM_COLUMNS = 14
 
 
 class Status:
@@ -87,6 +88,7 @@ class Task:
     status: str = ""
     predecessors: str = ""
     milestone: bool = False
+    milestone_link: str = ""  # WBS id of the milestone row this task belongs to
     notes: str = ""
     # Non-column metadata used only at write-time by the Linear-pull path
     # to wrap the name column as a Sheets HYPERLINK formula pointing at
@@ -116,7 +118,8 @@ class Task:
             status=r[9],
             predecessors=r[10],
             milestone=_parse_bool(r[11]),
-            notes=r[12],
+            milestone_link=r[12],
+            notes=r[13],
         )
 
     def to_row(self) -> list[str]:
@@ -133,6 +136,7 @@ class Task:
             self.status,
             self.predecessors,
             _format_bool(self.milestone),
+            self.milestone_link,
             self.notes,
         ]
 

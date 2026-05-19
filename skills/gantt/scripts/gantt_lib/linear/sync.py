@@ -250,7 +250,10 @@ def _apply_pull_writes(
             )
             if not apply_to_workbook:
                 continue
-            _apply_field_to_task(task, fc.field, fc.resolved_to_value)
+            if fc.field == "milestone":
+                _apply_milestone_to_task(task, fc.resolved_to_value, wbs_by_linear)
+            else:
+                _apply_field_to_task(task, fc.field, fc.resolved_to_value)
 
         # blockedby: augment workbook predecessors with any new Linear
         # blockers, never overwrite. Preserves user-managed DSL richness
@@ -327,9 +330,33 @@ def _apply_field_to_task(task: Task, field_name: str, value: Any) -> None:
             pass
     elif field_name == "team":
         task.team = str(value or "")
-    # blockedby: handled by `_augment_predecessors_from_linear` outside
-    # this function (needs link-table context). parent: skip — would
-    # require WBS-hierarchy restructuring on pull, out of scope.
+    # blockedby, milestone: handled outside this function — they need
+    # link-table context to translate linear_ids → workbook WBS ids.
+    # See `_augment_predecessors_from_linear` and `_apply_milestone_to_task`.
+    # parent: skip — would require WBS-hierarchy restructuring on pull,
+    # out of scope.
+
+
+def _apply_milestone_to_task(
+    task: Task,
+    linear_milestone_id: Any,
+    wbs_by_linear: dict[str, str],
+) -> None:
+    """Set `task.milestone_link` to the workbook WBS id of the milestone
+    row whose linear_id matches the supplied "MS-<uuid>" value.
+
+    Empty value clears the link. Unresolvable values (Linear milestone
+    isn't materialized as a workbook row yet) leave the existing link
+    intact — next sync after the milestone row is created will resolve.
+    """
+    value = str(linear_milestone_id or "").strip()
+    if not value:
+        task.milestone_link = ""
+        return
+    wbs = wbs_by_linear.get(value)
+    if wbs:
+        task.milestone_link = wbs
+    # else: silently keep the existing link; will resolve later.
 
 
 def _augment_predecessors_from_linear(

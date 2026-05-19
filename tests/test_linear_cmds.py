@@ -33,7 +33,7 @@ def _mk_program_ws(ss: FakeSpreadsheet, program: str = "TEST"):
     blank = [""] * schema.NUM_DATA_COLS
     ws.update(
         range_name="A1",
-        values=[blank, blank, blank, blank],
+        values=[blank, blank, blank, list(schema.DATA_HEADERS)],
         value_input_option="USER_ENTERED",
     )
     return ws

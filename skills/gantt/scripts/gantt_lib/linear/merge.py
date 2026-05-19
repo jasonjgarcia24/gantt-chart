@@ -76,6 +76,7 @@ MERGEABLE_FIELDS: tuple[str, ...] = (
     "blockedby",
     "parent",
     "team",
+    "milestone",
 )
 
 # Default-policy field winners on true conflict. Per the spec table:
@@ -236,6 +237,17 @@ def _workbook_parent(
     return _wbs_to_linear(parent_wbs, linear_by_wbs) or ""
 
 
+def _workbook_milestone(
+    task: Task, linear_by_wbs: dict[str, str]
+) -> str:
+    """Return the linear_id (prefixed "MS-<uuid>") of the milestone row
+    the task links to via `milestone_link`, or "" when unlinked or the
+    target milestone row isn't synced to Linear yet."""
+    if not task.milestone_link:
+        return ""
+    return linear_by_wbs.get(task.milestone_link, "") or ""
+
+
 def workbook_task_to_snapshot(
     task: Task, *, linear_by_wbs: dict[str, str], workbook_tasks: list[Task]
 ) -> IssueSnapshot:
@@ -251,7 +263,7 @@ def workbook_task_to_snapshot(
         estimate=str(task.duration) if task.duration else "",
         blockedby=_workbook_blockedby(task, linear_by_wbs),
         parent=_workbook_parent(task, workbook_tasks, linear_by_wbs),
-        milestone="",  # workbook doesn't track milestone
+        milestone=_workbook_milestone(task, linear_by_wbs),
         team=task.team or "",
     )
 
@@ -260,12 +272,14 @@ def cp_issue_to_snapshot(
     issue: CpInputIssue,
     *,
     blockedby_ids: list[str],
-    milestone_id: str = "",
+    milestone_id: Optional[str] = None,
     team_label_map: Optional[dict[str, str]] = None,
 ) -> IssueSnapshot:
     """Build a snapshot from the agent's normalized payload (current Linear).
-    `blockedby_ids` and `milestone_id` must be supplied by the caller from
-    the surrounding payload context (edges + milestone list).
+    `blockedby_ids` is supplied by the caller from the payload's edges.
+    `milestone_id` is an explicit override; when `None`, the helper reads
+    `issue.milestone_id` (the normal path; the override exists for tests
+    + callers that want to inject milestone context out-of-band).
     `team_label_map` (workbook-team → Linear-label-name) is used to
     derive the workbook-equivalent team from the issue's labels.
     """
@@ -281,7 +295,7 @@ def cp_issue_to_snapshot(
         estimate=str(int(issue.estimate_days)) if issue.estimate_days else "",
         blockedby=",".join(blockedby_ids),
         parent=issue.parent_linear_id or "",
-        milestone=milestone_id,
+        milestone=milestone_id if milestone_id is not None else (issue.milestone_id or ""),
         team=derive_team_from_labels(list(issue.labels or []), team_label_map or {}),
     )
 

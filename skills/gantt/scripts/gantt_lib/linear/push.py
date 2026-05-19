@@ -126,6 +126,7 @@ def _push_field_kwargs(
         "due_date": "dueDate",
         "parent": "parentId",
         "team": "labels",
+        "milestone": "milestone",
     }
     kwargs: dict[str, Any] = {}
     for fc in field_changes:
@@ -176,6 +177,17 @@ def _push_field_kwargs(
                 current_labels=current_labels or [],
                 team_label_map=team_label_map,
             )
+        elif mcp_key == "milestone":
+            # Workbook stores milestone linear_id as "MS-<uuid>" (synthesized
+            # by the agent for the milestone row). Linear's `save_issue.milestone`
+            # expects the raw UUID (or the milestone name). Strip the prefix.
+            raw = str(value or "")
+            if raw.startswith("MS-"):
+                value = raw[3:]
+            elif raw:
+                value = raw
+            else:
+                value = None  # clears the milestone link in Linear
         else:
             value = value or ""
         kwargs[mcp_key] = value

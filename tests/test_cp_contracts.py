@@ -272,6 +272,25 @@ def test_from_json_parses_linear_team_label_map_and_issue_labels():
     assert inp.issues[1].labels == ["MFG"]
 
 
+def test_from_json_parses_milestone_id():
+    """Each issue can carry milestone_id (prefixed 'MS-<uuid>') for
+    milestone-bidirectional sync. Default is empty when not present."""
+    s = json.dumps(
+        {
+            "project": {"name": "TPM90", "source": "linear"},
+            "config": {"default_duration_days": 1, "today": "2026-05-18"},
+            "issues": [
+                {"linear_id": "ENG-1", "title": "Sub-task",
+                 "milestone_id": "MS-0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d"},
+                {"linear_id": "ENG-2", "title": "Standalone"},
+            ],
+        }
+    )
+    inp = from_json(s)
+    assert inp.issues[0].milestone_id == "MS-0ec2ab6b-68aa-4c46-9dd1-2f59bae7921d"
+    assert inp.issues[1].milestone_id == ""
+
+
 # --- to_json: output shapes --------------------------------------------------
 
 

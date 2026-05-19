@@ -77,6 +77,11 @@ class CpInputIssue:
     # `CpInputConfig.linear_team_label_map.values()`. Order preserved so
     # the snapshot survives label-set normalization.
     labels: list = field(default_factory=list)
+    # Linear milestone the issue belongs to, prefixed with "MS-" to match
+    # the synthesized linear_id format used for workbook milestone rows
+    # (e.g. "MS-d6f4008d-a360-4ca0-a6b1-48481501ad97"). Empty when the
+    # issue isn't on a milestone or when milestone sync isn't configured.
+    milestone_id: str = ""
 
 
 @dataclass
@@ -208,6 +213,7 @@ def from_json(s: str) -> CpInput:
                 parent_linear_id=iss.get("parent_linear_id"),
                 linear_url=iss.get("linear_url", "") or "",
                 labels=list(iss.get("labels") or []),
+                milestone_id=iss.get("milestone_id", "") or "",
             )
         )
 

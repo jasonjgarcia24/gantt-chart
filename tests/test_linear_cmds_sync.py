@@ -33,7 +33,11 @@ def _mk_program_ws(ss: FakeSpreadsheet, program: str = "TEST"):
     tab = schema.program_tab_name(program)
     ws = ss.add_worksheet(title=tab, rows=200, cols=schema.NUM_DATA_COLS)
     blank = [""] * schema.NUM_DATA_COLS
-    ws.update("A1", [blank, blank, blank, blank], value_input_option="USER_ENTERED")
+    ws.update(
+        "A1",
+        [blank, blank, blank, list(schema.DATA_HEADERS)],
+        value_input_option="USER_ENTERED",
+    )
     return ws
 
 

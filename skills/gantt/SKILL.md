@@ -210,6 +210,7 @@ Build the JSON payload that the CLI expects. Field-by-field:
 | `issues[].parent_linear_id` | `issue.parentId` or `null` | Stable identifier; CLI uses for WBS hierarchy |
 | `issues[].linear_url` | `issue.url` | Used by CLI for HYPERLINK formula on the name cell |
 | `issues[].labels` | `[lbl.name for lbl in issue.labels]` | List of label names. Required when `linear_team_label_map` is set so the merge engine can derive workbook Team. Pass `[]` (or omit) when team sync is off. |
+| `issues[].milestone_id` | `"MS-" + issue.milestone.id` when the issue is on a milestone | Prefix with `MS-` so it matches the synthesized milestone-row `linear_id` (the CLI compares them in the 3-way merge). Empty string when the issue isn't on a milestone or milestone sync is off. |
 | `edges[]` | from `get_issue.relations.blockedBy` per issue | Each `blockedBy` item → `{from_linear_id, to_linear_id, type: "FS", lag_days: 0}` |
 
 **State mapping** (always by `statusType`, not `status` name):
@@ -243,6 +244,8 @@ synthetic issue to the payload:
 merge pages before invoking the CLI.
 
 **Team ↔ labels mapping** — when the user wants Team sync, fetch labels per team via `list_issue_labels(team=<team_name>)` and ask the user (or read from a workbook-side config) for the workbook-team → Linear-label correspondence. Populate `config.linear_team_label_map` accordingly. The team-label set must be mutually-exclusive: each issue should carry at most one team-label, or pull-side team derivation will silently pick the first-match.
+
+**Milestone bidirectional sync (PR2b)** — when a workbook user sets the visible "Milestone Link" column (col M) on a task to a milestone-row's WBS, the CLI translates that to the milestone's `MS-<uuid>` and pushes `save_issue(milestone=<uuid>)` (strips the `MS-` prefix). On pull, the agent must populate `issues[].milestone_id` as `"MS-" + linear_milestone_uuid` so the merge engine can compare it directly to the workbook-derived value. Milestone rows themselves stay synced via the existing `linear_id="MS-<uuid>"` convention; their title + targetDate round-trip via the standard title/due_date paths.
 
 ### Dry-run-first + two-stage confirmation
 

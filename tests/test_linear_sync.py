@@ -24,6 +24,7 @@ from gantt_lib.linear.merge import FieldChange, FieldClassification
 from gantt_lib.linear.sync import (
     ProgramTabMissingError,
     SyncResult,
+    _apply_milestone_to_task,
     _augment_predecessors_from_linear,
     sync,
 )
@@ -41,7 +42,13 @@ def _mk_program_ws(ss: FakeSpreadsheet, program: str = "TEST") -> FakeWorksheet:
     tab = schema.program_tab_name(program)
     ws = ss.add_worksheet(title=tab, rows=200, cols=schema.NUM_DATA_COLS)
     blank = [""] * schema.NUM_DATA_COLS
-    ws.update("A1", [blank, blank, blank, blank], value_input_option="USER_ENTERED")
+    # Row 4 = data header row (DAY_HEADER_ROW). read_program_tasks_with_rows
+    # validates the schema by checking this row matches DATA_HEADERS.
+    ws.update(
+        "A1",
+        [blank, blank, blank, list(schema.DATA_HEADERS)],
+        value_input_option="USER_ENTERED",
+    )
     return ws
 
 
@@ -416,3 +423,36 @@ def test_augment_noop_when_no_blockedby_field_change():
     )
     _augment_predecessors_from_linear(task, [title_fc], wbs_by_linear={})
     assert task.predecessors == "1FS"
+
+
+# --- _apply_milestone_to_task ------------------------------------------------
+
+
+def test_apply_milestone_resolves_ms_prefix_to_workbook_wbs():
+    """Linear's milestone_id 'MS-abc' → workbook task's milestone_link
+    gets the WBS of the matching workbook milestone row."""
+    task = Task(id="1.1", level=2, name="sub", duration=2, milestone_link="")
+    _apply_milestone_to_task(
+        task,
+        linear_milestone_id="MS-abc",
+        wbs_by_linear={"MS-abc": "5"},  # milestone row at WBS 5
+    )
+    assert task.milestone_link == "5"
+
+
+def test_apply_milestone_empty_value_clears_link():
+    task = Task(id="1.1", level=2, name="sub", duration=2, milestone_link="5")
+    _apply_milestone_to_task(task, linear_milestone_id="", wbs_by_linear={"MS-abc": "5"})
+    assert task.milestone_link == ""
+
+
+def test_apply_milestone_unresolvable_preserves_existing_link():
+    """Linear references a milestone we don't have a workbook row for yet.
+    Don't blow away the existing link — silently keep, retry next sync."""
+    task = Task(id="1.1", level=2, name="sub", duration=2, milestone_link="5")
+    _apply_milestone_to_task(
+        task,
+        linear_milestone_id="MS-unknown",
+        wbs_by_linear={"MS-abc": "5"},  # MS-unknown not present
+    )
+    assert task.milestone_link == "5"  # unchanged
