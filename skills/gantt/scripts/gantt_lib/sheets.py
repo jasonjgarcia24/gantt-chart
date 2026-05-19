@@ -126,6 +126,81 @@ def append_task(ws, task: Task) -> int:
     return row
 
 
+def migrate_program_tab_v1_to_v2(ss, program_name: str) -> str:
+    """Upgrade a v1 program tab (13 data cols) to v2 (14 cols, adds
+    Milestone Link between Milestone? and Notes). Idempotent — no-op
+    on v2 tabs. Raises ProgramTabSchemaError on unknown shapes.
+
+    Mechanically: insert one column at `COL_MILESTONE_LINK_IDX` via the
+    Sheets `insertDimension` API (Notes shifts M→N, timeline cells N+→O+
+    automatically), then write the "Milestone Link" header into the new
+    col M, row 4. Returns the post-migration schema version ('v2').
+
+    Caveats:
+    - CF rules and ARRAYFORMULA references that target absolute column
+      letters past col L update implicitly via the insertDimension API;
+      formulas anchored at fixed letters (e.g. `$E5`, `$F5` for team /
+      start / end columns to the left of the insert) are untouched.
+    - Data validation rules (e.g. the checkbox on col L) are
+      range-scoped and stay on their original column; the new col M
+      doesn't inherit them.
+    """
+    tab_name = schema.program_tab_name(program_name)
+    try:
+        ws = ss.worksheet(tab_name)
+    except Exception as e:
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} not found (tab {tab_name!r})"
+        ) from e
+
+    header_row = ws.get_values("A4:O4")
+    header_cells = header_row[0] if header_row else []
+    version = schema.detect_program_tab_schema(header_cells)
+
+    if version == "v2":
+        return "v2"
+
+    if version != "v1":
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} header row {header_cells!r} is not a "
+            "known schema (expected v1 or v2). Restore the header row "
+            "manually before migrating, or recreate via `gantt program new --force`."
+        )
+
+    # v1 → v2: insert column at idx COL_MILESTONE_LINK_IDX.
+    ss.batch_update({
+        "requests": [{
+            "insertDimension": {
+                "range": {
+                    "sheetId": ws.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": schema.COL_MILESTONE_LINK_IDX,
+                    "endIndex": schema.COL_MILESTONE_LINK_IDX + 1,
+                },
+                "inheritFromBefore": True,
+            }
+        }]
+    })
+
+    # Label the newly-empty col M of row 4 (the data-header row).
+    ws.update(
+        range_name=f"{schema.COL_MILESTONE_LINK_LETTER}{schema.DAY_HEADER_ROW}",
+        values=[["Milestone Link"]],
+        value_input_option="USER_ENTERED",
+    )
+
+    # Confirm.
+    new_header = ws.get_values("A4:O4")
+    new_cells = new_header[0] if new_header else []
+    new_version = schema.detect_program_tab_schema(new_cells)
+    if new_version != "v2":
+        raise schema.ProgramTabSchemaError(
+            f"migration completed but tab {tab_name!r} still doesn't validate "
+            f"as v2 (detected {new_version!r}, header now {new_cells!r})"
+        )
+    return "v2"
+
+
 def update_task_data(ws, row: int, task: Task) -> None:
     """Overwrite cols A..M for the given row with the task's data fields.
 

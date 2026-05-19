@@ -24,6 +24,14 @@ skill-local on purpose so the bundle stays fully self-contained.
   4 header rows (quarter / month / week-num / day), 126 daily timeline columns,
   ARRAYFORMULA-rendered task region, weekend shading + Q/M boundary borders.
   `--force` recreates the tab (loses existing tasks).
+- `gantt program migrate-schema <name>` — upgrade an existing tab from the
+  pre-PR2b v1 schema (13 data cols, no Milestone Link) to the current v2
+  schema (14 cols). Idempotent — no-op on v2 tabs. Use when reading a tab
+  raises `ProgramTabSchemaError` pointing to a v1 schema. Mechanically:
+  inserts one column between Milestone? (col L) and Notes (now col N);
+  timeline cells shift one column to the right. CF rules and ARRAYFORMULA
+  references that target cells past col L adjust implicitly via the
+  Sheets API.
 
 ### Tasks (each auto-cascades after the mutation)
 - `gantt task add <program> "<name>" [flags]` — append a new task; cascade fires immediately.

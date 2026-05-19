@@ -486,6 +486,32 @@ def cmd_program_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_program_migrate_schema(args: argparse.Namespace) -> int:
+    """Upgrade an existing program tab from v1 (13-col) to v2 (14-col,
+    adds Milestone Link). Idempotent — no-op on v2 tabs."""
+    from gantt_lib import schema, sheets
+
+    ss = _open_workbook()
+    try:
+        before_ws = ss.worksheet(schema.program_tab_name(args.name))
+        before_header = before_ws.get_values("A4:O4")
+        before_cells = before_header[0] if before_header else []
+        before_version = schema.detect_program_tab_schema(before_cells)
+    except Exception:
+        die(f"program {args.name!r} not found (tab {schema.program_tab_name(args.name)!r}).")
+
+    try:
+        after_version = sheets.migrate_program_tab_v1_to_v2(ss, args.name)
+    except schema.ProgramTabSchemaError as e:
+        die(str(e))
+
+    if before_version == "v2":
+        ok(f"program {args.name} migrate-schema — already v2, no changes ✓")
+    else:
+        ok(f"program {args.name} migrate-schema — {before_version} → {after_version} ✓")
+    return 0
+
+
 def _open_program_tab(args: argparse.Namespace):
     """Open the P_<program> tab on the bound workbook. Dies on missing tab."""
     from gantt_lib import schema
@@ -1107,7 +1133,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_pn = p_program_sub.add_parser(
         "new",
-        help="create a new program tab with the v1 schema",
+        help="create a new program tab with the current schema",
     )
     p_pn.add_argument("name", help="program short name (becomes tab P_<name>)")
     p_pn.add_argument(
@@ -1116,6 +1142,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="delete and recreate the tab if it exists",
     )
     p_pn.set_defaults(func=cmd_program_new)
+
+    p_pms = p_program_sub.add_parser(
+        "migrate-schema",
+        help="upgrade an existing v1 program tab to v2 (adds Milestone Link column)",
+    )
+    p_pms.add_argument("name", help="program short name (the P_<name> tab to migrate)")
+    p_pms.set_defaults(func=cmd_program_migrate_schema)
 
     # ---------- task add / update / delete ----------
 

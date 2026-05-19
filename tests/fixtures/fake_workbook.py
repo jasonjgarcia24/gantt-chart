@@ -135,24 +135,43 @@ class FakeSpreadsheet:
     def batch_update(self, body: dict):
         """Record the request body and apply any side-effecting requests we model.
 
-        Currently honors `deleteDimension` for ROWS so the baseline-clear path
-        works under tests. Other request types (formatting, mergeCells, etc.)
-        are recorded but not applied — production code that depends on those
-        having actually been applied should grow a more capable fake when needed.
+        Currently honors:
+        - `deleteDimension` for ROWS (baseline-clear path)
+        - `insertDimension` for COLUMNS (program-tab schema migration)
+        Other request types (formatting, mergeCells, etc.) are recorded
+        but not applied.
         """
         self.batch_updates.append(body)
         for req in body.get("requests", []):
             dd = req.get("deleteDimension")
-            if not dd:
+            if dd:
+                r = dd.get("range", {})
+                if r.get("dimension") != "ROWS":
+                    continue
+                sheet_id = r.get("sheetId")
+                target = next((w for w in self._sheets.values() if w.id == sheet_id), None)
+                if target is None:
+                    continue
+                start = r.get("startIndex", 0)
+                end = r.get("endIndex", start + 1)
+                for row_1based in range(end, start, -1):
+                    target.delete_rows(row_1based)
                 continue
-            r = dd.get("range", {})
-            if r.get("dimension") != "ROWS":
-                continue
-            sheet_id = r.get("sheetId")
-            target = next((w for w in self._sheets.values() if w.id == sheet_id), None)
-            if target is None:
-                continue
-            start = r.get("startIndex", 0)
-            end = r.get("endIndex", start + 1)
-            for row_1based in range(end, start, -1):
-                target.delete_rows(row_1based)
+
+            ins = req.get("insertDimension")
+            if ins:
+                r = ins.get("range", {})
+                if r.get("dimension") != "COLUMNS":
+                    continue
+                sheet_id = r.get("sheetId")
+                target = next((w for w in self._sheets.values() if w.id == sheet_id), None)
+                if target is None:
+                    continue
+                start = r.get("startIndex", 0)
+                end = r.get("endIndex", start + 1)
+                delta = end - start
+                # Insert `delta` empty cells at index `start` in every row.
+                for row in target.rows:
+                    for _ in range(delta):
+                        if len(row) >= start:
+                            row.insert(start, "")
