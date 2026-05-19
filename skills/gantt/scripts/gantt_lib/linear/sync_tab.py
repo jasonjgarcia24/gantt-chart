@@ -24,16 +24,17 @@ workbook-only sidecar fields plus the last-known Linear snapshot for
     P: snapshot_blockedby    (comma-separated linear_ids)
     Q: snapshot_parent       (parent linear_id)
     R: snapshot_milestone    (milestone id)
+    S: snapshot_team         (workbook team name derived from labels)
 
 The tab is created hidden so it doesn't clutter the workbook UI. A
 DO-NOT-EDIT warning row sits below the header so users who stumble on
 it via Sheets' "Show hidden tabs" menu know it's machine-managed.
 
 Module-level operations:
-- `ensure_sync_tab(ss)` — bootstrap if absent (Phase-2 18-col), auto-
-  migrate Phase-1 5-col tabs, return the worksheet
+- `ensure_sync_tab(ss)` — bootstrap if absent (Phase-2.1 19-col), auto-
+  migrate Phase-1 (5-col) and Phase-2 (18-col) tabs, return the worksheet
 - `migrate_sync_tab(ss)` — explicit upgrade-only entry point; returns
-  count of rows migrated, 0 if already at Phase-2 schema or tab absent
+  count of rows migrated, 0 if already at current schema or tab absent
 - `read_links(ss, program)` — list[SyncLink] for one program
 - `upsert_links(ss, program, links)` — replace this program's rows
 - `delete_links(ss, program)` — drop this program's rows (for --force)
@@ -55,8 +56,9 @@ SYNC_TAB = "_LinearSync"
 # can detect Phase-1 tabs unambiguously.
 PHASE1_HEADERS = ["program", "wbs_id", "linear_id", "last_synced", "linear_url"]
 
-# Phase-2 headers (cols A-R). Adds 4 sidecar cols + 9 snapshot cols.
-SYNC_HEADERS = PHASE1_HEADERS + [
+# Phase-2 headers (cols A-R). 4 sidecar + 9 snapshot fields. Kept as a
+# constant so the v2→v3 migration can detect 18-col tabs unambiguously.
+PHASE2_HEADERS = PHASE1_HEADERS + [
     "sidecar_predecessors",
     "sidecar_percent",
     "sidecar_notes",
@@ -72,8 +74,13 @@ SYNC_HEADERS = PHASE1_HEADERS + [
     "snapshot_milestone",
 ]
 
-_N_COLS = len(SYNC_HEADERS)  # 18
-_LAST_COL_LETTER = schema.col_letter(_N_COLS)  # "R"
+# Current (Phase-2.1) headers — adds snapshot_team to support team↔labels sync.
+SYNC_HEADERS = PHASE2_HEADERS + [
+    "snapshot_team",
+]
+
+_N_COLS = len(SYNC_HEADERS)  # 19
+_LAST_COL_LETTER = schema.col_letter(_N_COLS)  # "S"
 _DATA_FIRST_ROW = 3  # row 1 = headers, row 2 = warning, row 3+ = data
 
 SYNC_WARNING_ROW = [
@@ -111,6 +118,7 @@ class SyncLink:
     snapshot_blockedby: str = ""
     snapshot_parent: str = ""
     snapshot_milestone: str = ""
+    snapshot_team: str = ""
 
 
 # Tuple of dataclass field names in column order. Built once so
@@ -155,8 +163,11 @@ def _read_header_row(ws) -> list[str]:
 
 
 def _detect_schema_version(header_row: list[str]) -> str:
-    """Return 'v2' if the header matches Phase 2, 'v1' if Phase 1, else 'unknown'."""
+    """Return 'v3' for the current schema, 'v2' for Phase 2 (18-col),
+    'v1' for Phase 1 (5-col), or 'unknown'."""
     if header_row == SYNC_HEADERS:
+        return "v3"
+    if header_row == PHASE2_HEADERS:
         return "v2"
     if header_row == PHASE1_HEADERS:
         return "v1"
@@ -195,18 +206,23 @@ def ensure_sync_tab(ss):
     if ws is not None:
         header = _read_header_row(ws)
         version = _detect_schema_version(header)
+        if version == "v3":
+            return ws
         if version == "v2":
+            _migrate_v2_to_v3(ss, ws)
             return ws
         if version == "v1":
             _migrate_v1_to_v2(ss, ws)
+            _migrate_v2_to_v3(ss, ws)
             return ws
         # Empty (rare race) or unknown — raise to surface to caller.
         if header:
             raise SyncTabSchemaError(
                 f"`_LinearSync` tab header row {header!r} does not match "
-                f"any known schema. Expected either Phase-1 ({PHASE1_HEADERS!r}) "
-                f"or Phase-2 ({SYNC_HEADERS!r}). To recover: delete the tab "
-                "(or rebuild it) and re-run `gantt linear-sync --force`."
+                f"any known schema. Expected one of Phase-1 ({PHASE1_HEADERS!r}), "
+                f"Phase-2 ({PHASE2_HEADERS!r}), or current ({SYNC_HEADERS!r}). "
+                "To recover: delete the tab (or rebuild it) and re-run "
+                "`gantt linear-sync --force`."
             )
         # Header is empty — fall through and re-bootstrap.
 
@@ -230,12 +246,13 @@ def ensure_sync_tab(ss):
 
 
 def migrate_sync_tab(ss) -> int:
-    """Upgrade an existing Phase-1 (5-col) `_LinearSync` tab to Phase-2
-    (18-col). Returns the count of data rows migrated.
+    """Upgrade an existing `_LinearSync` tab to the current schema.
+    Chains v1 → v2 → v3 as needed. Returns the count of data rows
+    migrated.
 
-    Idempotent: a no-op (returns 0) if the tab is already Phase-2 or
-    absent. Raises SyncTabSchemaError if the header is in an unknown
-    shape (caller must reset manually before re-running).
+    Idempotent: a no-op (returns 0) if the tab is already at the current
+    schema or absent. Raises SyncTabSchemaError if the header is in an
+    unknown shape (caller must reset manually before re-running).
     """
     try:
         ws = ss.worksheet(SYNC_TAB)
@@ -244,17 +261,21 @@ def migrate_sync_tab(ss) -> int:
 
     header = _read_header_row(ws)
     version = _detect_schema_version(header)
-    if version == "v2":
+    if version == "v3":
         return 0
-    if version != "v1":
-        raise SyncTabSchemaError(
-            f"`_LinearSync` tab header row {header!r} does not match "
-            f"Phase-1 schema; cannot auto-migrate. Expected "
-            f"{PHASE1_HEADERS!r}. To recover: delete the tab and re-run "
-            "`gantt linear-sync --force`."
-        )
-
-    return _migrate_v1_to_v2(ss, ws)
+    if version == "v2":
+        return _migrate_v2_to_v3(ss, ws)
+    if version == "v1":
+        count = _migrate_v1_to_v2(ss, ws)
+        _migrate_v2_to_v3(ss, ws)
+        return count
+    raise SyncTabSchemaError(
+        f"`_LinearSync` tab header row {header!r} does not match "
+        f"any known schema; cannot auto-migrate. Expected one of "
+        f"Phase-1 ({PHASE1_HEADERS!r}), Phase-2 ({PHASE2_HEADERS!r}), "
+        f"or current ({SYNC_HEADERS!r}). To recover: delete the tab "
+        "and re-run `gantt linear-sync --force`."
+    )
 
 
 def _migrate_v1_to_v2(ss, ws) -> int:
@@ -290,6 +311,45 @@ def _migrate_v1_to_v2(ss, ws) -> int:
     # hidden, WBS col TEXT) — safe to re-issue; idempotent on Sheets side.
     ss.batch_update({"requests": _format_requests(ws.id)})
 
+    return data_count
+
+
+def _migrate_v2_to_v3(ss, ws) -> int:
+    """Append the `snapshot_team` column (col S) to an 18-col Phase-2
+    tab in place. Returns the data-row count seen (informational; the
+    migration just pads existing rows with one empty cell).
+
+    `snapshot_team` defaults to "" — the next sync's pull pass will
+    populate it from current Linear labels (filtered through the
+    workbook's `linear_team_label_map` config).
+    """
+    # Capture existing 18-col data rows so we can pad to 19.
+    existing = ws.get_values(f"A{_DATA_FIRST_ROW}:{schema.col_letter(len(PHASE2_HEADERS))}")
+    data_count = sum(
+        1 for row in existing
+        if _row_to_link(row + [""] * (_N_COLS - len(row))) is not None
+    )
+
+    # Rewrite headers + warning row to the current 19-col shape.
+    ws.update(
+        range_name=f"A1:{_LAST_COL_LETTER}2",
+        values=[SYNC_HEADERS, SYNC_WARNING_ROW],
+        value_input_option="USER_ENTERED",
+    )
+
+    # Pad each existing data row with one extra empty cell (snapshot_team).
+    if existing:
+        padded: list[list[str]] = []
+        for row in existing:
+            cells = list(row) + [""] * (_N_COLS - len(row))
+            padded.append(cells[:_N_COLS])
+        ws.update(
+            range_name=f"A{_DATA_FIRST_ROW}",
+            values=padded,
+            value_input_option="USER_ENTERED",
+        )
+
+    ss.batch_update({"requests": _format_requests(ws.id)})
     return data_count
 
 

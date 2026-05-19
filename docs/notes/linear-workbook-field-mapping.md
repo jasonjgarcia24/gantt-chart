@@ -2,7 +2,7 @@
 
 Inventory of every field on both sides of the sync, what's currently wired, and where the gaps are.
 
-Last updated: 2026-05-18 (End ↔ dueDate now fully bidirectional via 3-way merge).
+Last updated: 2026-05-18 (PR3: Team ↔ Linear labels bidirectional via `linear_team_label_map`).
 
 Companion docs:
 - `linear-mcp-shapes.md` — read-side MCP payload shapes
@@ -97,6 +97,7 @@ Captured across `tests/fixtures/linear_mcp/save_issue_*.json` and `linear/snapsh
 | `End` | `dueDate` | both | `LINEAR_WINS` | Treated as the same field; goes through normal 3-way merge. Workbook cascade still owns End locally between syncs. |
 | `Linear URL` | `url` | pull only | n/a | Cached → `HYPERLINK` formula |
 | `Milestone?` (bool) | `milestone.id` | snapshot only | n/a | Captured for future Phase 2.1 |
+| `Team` | derived from `labels[]` via `linear_team_label_map` | both | `LINEAR_WINS` | Push replaces team-labels (preserves non-team labels like Bug/Feature); pull intersects issue.labels with map.values(). Empty map = team sync disabled. |
 
 ---
 
@@ -108,14 +109,14 @@ Captured across `tests/fixtures/linear_mcp/save_issue_*.json` and `linear/snapsh
 |-------|----------------|
 | `% Complete` | Linear has no native completion-% on issues; state transitions are the proxy. Greyed out on linked rows in the workbook UI as a visual cue. |
 | `Notes` | Linear's `description` is rich-text markdown — semantic mismatch with workbook freeform notes; not yet wired. Greyed out on linked rows. |
-| `Team` | Linear has no per-issue team field (team is project-level). PR3 will wire bidirectional sync via Linear labels. |
+| `Team` | Sync wired in PR3 — see "What's wired" below for details. |
 | `Level` | Pure UI artifact (WBS depth) — meaningless in Linear |
 
 ### Linear-only (we don't consume)
 
 | Field | Notes |
 |-------|-------|
-| `labels` | Candidate for Team mapping; would need policy on multi-label rows |
+| `labels` | Used as the carrier for workbook Team (via `linear_team_label_map`). Non-team labels (Bug, Feature, etc.) pass through unmodified. |
 | `cycle` | Could surface in workbook for release-grouping; not yet specified |
 | `priority` | No workbook priority column |
 | `description` | Workbook has no rich-text store; would need a sidecar column |

@@ -35,6 +35,7 @@ SNAPSHOT_FIELD_NAMES: tuple[str, ...] = (
     "blockedby",
     "parent",
     "milestone",
+    "team",
 )
 
 
@@ -55,6 +56,7 @@ class IssueSnapshot:
     blockedby: str = ""  # comma-separated linear_ids in fetch order
     parent: str = ""
     milestone: str = ""
+    team: str = ""  # workbook team name derived from labels via the map
 
 
 # ----- Construction from Linear MCP payload ----------------------------------
@@ -68,10 +70,33 @@ def _str_or_empty(v: Any) -> str:
     return str(v)
 
 
+def derive_team_from_labels(
+    label_names: list[str],
+    team_label_map: dict[str, str],
+) -> str:
+    """Return the workbook team name implied by the issue's label set,
+    or "" if none of the labels are in the map's value set.
+
+    `team_label_map` is workbook-team-name → Linear-label-name. Multiple
+    matches are deterministic-ish via dict insertion order — but a real
+    workbook should keep labels mutually-exclusive (one team-label per
+    issue) to avoid ambiguity.
+    """
+    if not team_label_map or not label_names:
+        return ""
+    label_to_team = {label: team for team, label in team_label_map.items()}
+    for name in label_names:
+        team = label_to_team.get(name)
+        if team:
+            return team
+    return ""
+
+
 def build_snapshot_from_linear(
     linear_issue: dict,
     *,
     blockedby_ids: Optional[list[str]] = None,
+    team_label_map: Optional[dict[str, str]] = None,
 ) -> IssueSnapshot:
     """Convert a Linear MCP issue dict (from list_issues / get_issue)
     into a snapshot.
@@ -126,6 +151,20 @@ def build_snapshot_from_linear(
     # Due date — Linear returns ISO with optional time; keep as-given.
     due_date = _str_or_empty(linear_issue.get("dueDate"))
 
+    # Team: derived from labels via the workbook→label map.
+    raw_labels = linear_issue.get("labels") or []
+    label_names: list[str] = []
+    for entry in raw_labels:
+        if isinstance(entry, dict):
+            n = _str_or_empty(entry.get("name"))
+            if n:
+                label_names.append(n)
+        elif isinstance(entry, str):
+            n = _str_or_empty(entry)
+            if n:
+                label_names.append(n)
+    team = derive_team_from_labels(label_names, team_label_map or {})
+
     return IssueSnapshot(
         title=_str_or_empty(linear_issue.get("title")),
         state=state_name,
@@ -136,6 +175,7 @@ def build_snapshot_from_linear(
         blockedby=blockedby_str,
         parent=parent,
         milestone=milestone_id,
+        team=team,
     )
 
 
@@ -228,6 +268,11 @@ def milestones_equal(a: Any, b: Any) -> bool:
     return _norm(a) == _norm(b)
 
 
+def teams_equal(a: Any, b: Any) -> bool:
+    """Case-insensitive team name compare; empty/None treated equal."""
+    return _norm(a).lower() == _norm(b).lower()
+
+
 # Field-name → equality function. Used by the merge engine to dispatch
 # the right equality semantics per field.
 FIELD_EQUALITY: dict[str, callable] = {
@@ -240,6 +285,7 @@ FIELD_EQUALITY: dict[str, callable] = {
     "blockedby": blockedby_equal,
     "parent": parents_equal,
     "milestone": milestones_equal,
+    "team": teams_equal,
 }
 
 

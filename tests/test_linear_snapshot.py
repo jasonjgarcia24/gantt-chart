@@ -18,11 +18,13 @@ from gantt_lib.linear.snapshot import (
     assignees_equal,
     blockedby_equal,
     build_snapshot_from_linear,
+    derive_team_from_labels,
     due_dates_equal,
     estimates_equal,
     snapshot_to_sync_fields,
     snapshots_equal,
     sync_fields_to_snapshot,
+    teams_equal,
     titles_equal,
 )
 from gantt_lib.linear.sync_tab import SyncLink
@@ -234,3 +236,59 @@ def test_snapshots_unequal_on_any_field_difference():
 def test_snapshots_equal_empty():
     """Two default-empty snapshots compare equal."""
     assert snapshots_equal(IssueSnapshot(), IssueSnapshot())
+
+
+# --- team/labels derivation --------------------------------------------------
+
+
+def test_derive_team_returns_empty_when_no_map_or_no_labels():
+    assert derive_team_from_labels(["SW"], {}) == ""
+    assert derive_team_from_labels([], {"Engineering": "SW"}) == ""
+
+
+def test_derive_team_matches_first_label_in_map():
+    """Issue tagged with both 'SW' (mapped) and 'Bug' (unmapped). Returns
+    the workbook team name for the mapped label."""
+    team_map = {"Engineering": "SW", "Manufacturing": "MFG"}
+    assert derive_team_from_labels(["Bug", "SW"], team_map) == "Engineering"
+
+
+def test_derive_team_ignores_unmapped_labels():
+    team_map = {"Engineering": "SW"}
+    assert derive_team_from_labels(["Bug", "Feature"], team_map) == ""
+
+
+def test_build_snapshot_derives_team_from_labels():
+    """build_snapshot_from_linear pulls labels from `linear_issue.labels`
+    (array of {id, name, color} objects from Linear) and resolves the
+    workbook team via the map."""
+    issue = {
+        "id": "JAS-1", "title": "x", "status": "Backlog",
+        "labels": [
+            {"id": "abc", "name": "SW", "color": "#000"},
+            {"id": "def", "name": "Bug", "color": "#f00"},
+        ],
+    }
+    snap = build_snapshot_from_linear(
+        issue, blockedby_ids=[],
+        team_label_map={"Engineering": "SW"},
+    )
+    assert snap.team == "Engineering"
+
+
+def test_build_snapshot_empty_team_when_no_label_matches():
+    issue = {
+        "id": "JAS-1", "title": "x", "status": "Backlog",
+        "labels": [{"id": "x", "name": "Bug", "color": "#f00"}],
+    }
+    snap = build_snapshot_from_linear(
+        issue, blockedby_ids=[],
+        team_label_map={"Engineering": "SW"},
+    )
+    assert snap.team == ""
+
+
+def test_teams_equal_case_insensitive():
+    assert teams_equal("Engineering", "engineering")
+    assert teams_equal("", None)
+    assert not teams_equal("Engineering", "Manufacturing")

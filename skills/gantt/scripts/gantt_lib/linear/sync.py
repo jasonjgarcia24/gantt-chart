@@ -316,6 +316,8 @@ def _apply_field_to_task(task: Task, field_name: str, value: Any) -> None:
             task.duration = int(float(value)) if value not in (None, "") else 0
         except (TypeError, ValueError):
             pass
+    elif field_name == "team":
+        task.team = str(value or "")
     # blockedby, parent: skip — these require cross-row translation and
     # are workbook-wins fields anyway, so PULL/Linear-wins shouldn't
     # produce them often. Future enhancement if needed.
@@ -551,12 +553,15 @@ def sync(
     mcp_requests: list[MCPRequest]
     if direction in ("push", "both"):
         workbook_tasks_by_wbs = {t.id: t for t in workbook_tasks}
+        linear_issues_by_id = {iss.linear_id: iss for iss in payload.issues}
         mcp_requests = build_push_requests(
             diff,
             workbook_tasks_by_wbs=workbook_tasks_by_wbs,
             linear_team=payload.config.linear_team,
             linear_project=payload.config.linear_project,
             linear_archive_state=payload.config.linear_archive_state,
+            linear_issues_by_id=linear_issues_by_id,
+            linear_team_label_map=payload.config.linear_team_label_map,
         )
     else:
         mcp_requests = []

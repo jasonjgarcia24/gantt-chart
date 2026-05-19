@@ -32,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from gantt_lib.cp.contracts import CpInputIssue
 from gantt_lib.linear.merge import (
     FieldChange,
     FieldClassification,
@@ -78,13 +79,43 @@ def _placeholder_for(wbs_id: str) -> str:
 # ----- Per-row request builders ----------------------------------------------
 
 
-def _push_field_kwargs(field_changes: list[FieldChange]) -> dict[str, Any]:
+def _compute_team_labels(
+    workbook_team: str,
+    current_labels: list[str],
+    team_label_map: dict[str, str],
+) -> list[str]:
+    """Compute the replacement labels list for a team PUSH.
+
+    Linear's `save_issue.labels` is a *full replacement* (not an
+    append/diff). To preserve labels the user manages directly in Linear
+    (e.g. "Bug", "Improvement"), we keep everything *except* labels that
+    appear in the team-label map's value set, then add the one mapped
+    label for the workbook's current team value.
+    """
+    team_label_set = set(team_label_map.values())
+    preserved = [lbl for lbl in (current_labels or []) if lbl not in team_label_set]
+    target_label = team_label_map.get(workbook_team) if workbook_team else None
+    if target_label and target_label not in preserved:
+        return preserved + [target_label]
+    return preserved
+
+
+def _push_field_kwargs(
+    field_changes: list[FieldChange],
+    *,
+    current_labels: Optional[list[str]] = None,
+    team_label_map: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
     """Translate the field_changes the workbook is asserting (PUSH or
     workbook-winning CONFLICT) into save_issue kwargs.
 
     Maps internal snapshot field names → Linear save_issue param names.
     Skips PULL / CONVERGED / NO_OP (those don't need a Linear write)
     and any conflict where the winner is Linear.
+
+    `current_labels` and `team_label_map` are needed to build the
+    replacement `labels` array when team changes (Linear's labels API
+    is full-replacement, not append). Pass [] / {} when not syncing teams.
     """
     # Internal snapshot name → Linear MCP save_issue param name.
     field_to_mcp = {
@@ -94,6 +125,7 @@ def _push_field_kwargs(field_changes: list[FieldChange]) -> dict[str, Any]:
         "estimate": "estimate",
         "due_date": "dueDate",
         "parent": "parentId",
+        "team": "labels",
     }
     kwargs: dict[str, Any] = {}
     for fc in field_changes:
@@ -134,6 +166,16 @@ def _push_field_kwargs(field_changes: list[FieldChange]) -> dict[str, Any]:
             value = value or None  # null clears the dueDate in Linear
         elif mcp_key == "parentId":
             value = value or None
+        elif mcp_key == "labels":
+            # Team → labels replacement. Skip if no mapping configured
+            # (the agent didn't ask for team sync on this run).
+            if not team_label_map:
+                continue
+            value = _compute_team_labels(
+                workbook_team=str(value or ""),
+                current_labels=current_labels or [],
+                team_label_map=team_label_map,
+            )
         else:
             value = value or ""
         kwargs[mcp_key] = value
@@ -183,10 +225,19 @@ def _resolve_blockedby_to_linear_ids(
     return concrete, placeholders
 
 
-def _build_update_request(row: SyncRowDiff) -> Optional[MCPRequest]:
+def _build_update_request(
+    row: SyncRowDiff,
+    *,
+    current_labels: Optional[list[str]] = None,
+    team_label_map: Optional[dict[str, str]] = None,
+) -> Optional[MCPRequest]:
     """Build the pass-1 save_issue request for an `update` row, or None
     if no field needs pushing (everything was PULL/CONVERGED/Linear-wins)."""
-    kwargs = _push_field_kwargs(row.field_changes)
+    kwargs = _push_field_kwargs(
+        row.field_changes,
+        current_labels=current_labels,
+        team_label_map=team_label_map,
+    )
     if not kwargs:
         return None
     kwargs = {"id": row.linear_id, **kwargs}
@@ -203,6 +254,7 @@ def _build_create_request(
     task,  # gantt_lib.model.Task — passed by caller for create
     linear_team: str,
     linear_project: str,
+    team_label_map: Optional[dict[str, str]] = None,
 ) -> MCPRequest:
     """Build the pass-1 save_issue create request. blockedBy intentionally
     omitted — pass 2 reconciles it once new linear_ids are known."""
@@ -217,6 +269,10 @@ def _build_create_request(
         kwargs["estimate"] = float(task.duration)
     if task.end:
         kwargs["dueDate"] = task.end.isoformat()
+    if task.team and team_label_map:
+        target_label = team_label_map.get(task.team)
+        if target_label:
+            kwargs["labels"] = [target_label]
     return MCPRequest(
         tool=SAVE_ISSUE_TOOL,
         kwargs=kwargs,
@@ -295,6 +351,8 @@ def build_push_requests(
     linear_team: str,
     linear_project: str,
     linear_archive_state: str,
+    linear_issues_by_id: Optional[dict[str, CpInputIssue]] = None,
+    linear_team_label_map: Optional[dict[str, str]] = None,
 ) -> list[MCPRequest]:
     """Convert a SyncDiff into ordered MCP request descriptors for the
     agent to dispatch.
@@ -307,9 +365,17 @@ def build_push_requests(
     Caller should dispatch all pass-1 requests in parallel, collect
     `id`s from create responses, then substitute the `__NEW_<wbs>__`
     placeholders in pass-2 requests before dispatching pass 2.
+
+    `linear_issues_by_id` + `linear_team_label_map` are required only
+    when pushing team changes — the team push must compute a full
+    replacement labels list, which needs the issue's current labels
+    plus the team-label mapping. Pass None for both to disable team push.
     """
     if linear_archive_state and not isinstance(linear_archive_state, str):
         raise TypeError("linear_archive_state must be a string")
+
+    issues_by_id = linear_issues_by_id or {}
+    team_label_map = linear_team_label_map or {}
 
     pass1: list[MCPRequest] = []
     pass2: list[MCPRequest] = []
@@ -318,7 +384,13 @@ def build_push_requests(
     new_linear_id_by_wbs: dict[str, str] = {}
     for row in diff.rows:
         if row.action == "update":
-            req = _build_update_request(row)
+            issue = issues_by_id.get(row.linear_id)
+            current_labels = list(issue.labels) if issue else []
+            req = _build_update_request(
+                row,
+                current_labels=current_labels,
+                team_label_map=team_label_map,
+            )
             if req is not None:
                 pass1.append(req)
         elif row.action == "create":
@@ -329,6 +401,7 @@ def build_push_requests(
                 row, task,
                 linear_team=linear_team,
                 linear_project=linear_project,
+                team_label_map=team_label_map,
             )
             pass1.append(req)
             new_linear_id_by_wbs[row.wbs_id] = ""  # placeholder, filled by agent later

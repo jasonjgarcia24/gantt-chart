@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from gantt_lib.cp.contracts import CpInputIssue
 from gantt_lib.linear.merge import (
     FieldChange,
     FieldClassification,
@@ -61,7 +62,16 @@ def _fc(field, W, S, L, classification, resolved, source):
     )
 
 
-def _build(rows, *, tasks_by_wbs=None, team="JasonGarcia", project="Test", archive_state="Cancelled"):
+def _build(
+    rows,
+    *,
+    tasks_by_wbs=None,
+    team="JasonGarcia",
+    project="Test",
+    archive_state="Cancelled",
+    issues_by_id=None,
+    team_label_map=None,
+):
     diff = SyncDiff(program="TEST", rows=rows)
     return build_push_requests(
         diff,
@@ -69,6 +79,8 @@ def _build(rows, *, tasks_by_wbs=None, team="JasonGarcia", project="Test", archi
         linear_team=team,
         linear_project=project,
         linear_archive_state=archive_state,
+        linear_issues_by_id=issues_by_id,
+        linear_team_label_map=team_label_map,
     )
 
 
@@ -366,4 +378,101 @@ def test_pass_1_requests_come_before_pass_2_in_output():
     assert len(reqs) == 2
     assert reqs[0].pass_number == 1  # field updates
     assert reqs[1].pass_number == 2  # blockedBy
+
+
+# --- team → labels push ------------------------------------------------------
+
+
+def test_team_push_replaces_team_label_preserves_others():
+    """Workbook changed team to Manufacturing; Linear currently has
+    labels ["SW", "Bug"]. Push must replace "SW" (the previous team-label)
+    with "MFG" (the new one) and preserve "Bug"."""
+    row = _mk_update_row(field_changes=[
+        _fc("team", "Manufacturing", "Engineering", "Engineering",
+            FieldClassification.PUSH, "Manufacturing", "workbook"),
+    ])
+    issue = CpInputIssue(linear_id="JAS-5", title="x", labels=["SW", "Bug"])
+    reqs = _build(
+        [row],
+        issues_by_id={"JAS-5": issue},
+        team_label_map={"Engineering": "SW", "Manufacturing": "MFG"},
+    )
+    assert len(reqs) == 1
+    assert reqs[0].kwargs["id"] == "JAS-5"
+    assert set(reqs[0].kwargs["labels"]) == {"Bug", "MFG"}
+
+
+def test_team_push_clearing_team_drops_team_label_only():
+    """Workbook team cleared to "". Push must drop the team-label but
+    keep non-team labels."""
+    row = _mk_update_row(field_changes=[
+        _fc("team", "", "Engineering", "Engineering",
+            FieldClassification.PUSH, "", "workbook"),
+    ])
+    issue = CpInputIssue(linear_id="JAS-5", title="x", labels=["SW", "Bug"])
+    reqs = _build(
+        [row],
+        issues_by_id={"JAS-5": issue},
+        team_label_map={"Engineering": "SW"},
+    )
+    assert len(reqs) == 1
+    assert reqs[0].kwargs["labels"] == ["Bug"]
+
+
+def test_team_push_suppressed_when_no_label_map():
+    """No team_label_map configured → team push is silently dropped
+    (callers that don't want team sync get no labels writes)."""
+    row = _mk_update_row(field_changes=[
+        _fc("team", "Engineering", "", "",
+            FieldClassification.PUSH, "Engineering", "workbook"),
+    ])
+    issue = CpInputIssue(linear_id="JAS-5", title="x", labels=["Bug"])
+    reqs = _build(
+        [row],
+        issues_by_id={"JAS-5": issue},
+        team_label_map=None,
+    )
+    assert reqs == []
+
+
+def test_team_push_pull_classification_emits_nothing():
+    """PULL means Linear changed the team-label; workbook absorbs it
+    locally without emitting a push."""
+    row = _mk_update_row(field_changes=[
+        _fc("team", "Engineering", "Engineering", "Manufacturing",
+            FieldClassification.PULL, "Manufacturing", "linear"),
+    ])
+    issue = CpInputIssue(linear_id="JAS-5", title="x", labels=["MFG"])
+    reqs = _build(
+        [row],
+        issues_by_id={"JAS-5": issue},
+        team_label_map={"Engineering": "SW", "Manufacturing": "MFG"},
+    )
+    assert reqs == []
+
+
+def test_create_includes_team_label_when_team_set_and_map_provided():
+    """A new workbook row with team='Engineering' creates a Linear issue
+    with labels=['SW'] when the map has Engineering→SW."""
+    row = SyncRowDiff(wbs_id="3", linear_id="", title="X", action="create")
+    task = Task(id="3", level=1, name="X", duration=2, team="Engineering")
+    reqs = _build(
+        [row],
+        tasks_by_wbs={"3": task},
+        team_label_map={"Engineering": "SW"},
+    )
+    assert len(reqs) == 1
+    assert reqs[0].kwargs.get("labels") == ["SW"]
+
+
+def test_create_omits_labels_when_team_unmapped():
+    """If the workbook team isn't in the map, the create has no labels."""
+    row = SyncRowDiff(wbs_id="3", linear_id="", title="X", action="create")
+    task = Task(id="3", level=1, name="X", duration=2, team="UnmappedTeam")
+    reqs = _build(
+        [row],
+        tasks_by_wbs={"3": task},
+        team_label_map={"Engineering": "SW"},
+    )
+    assert "labels" not in reqs[0].kwargs
 

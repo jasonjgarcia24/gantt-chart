@@ -239,6 +239,37 @@ def test_from_json_omits_optional_fields():
     assert inp.issues[0].percent == 0
     assert inp.issues[0].estimate_days is None
     assert inp.issues[0].parent_linear_id is None
+    assert inp.issues[0].labels == []
+    assert inp.config.linear_team_label_map == {}
+
+
+def test_from_json_parses_linear_team_label_map_and_issue_labels():
+    """Team-sync inputs: config carries workbook-team→Linear-label map;
+    each issue carries its current label names."""
+    s = json.dumps(
+        {
+            "project": {"name": "TPM90", "source": "linear"},
+            "config": {
+                "default_duration_days": 1,
+                "today": "2026-05-18",
+                "linear_team_label_map": {
+                    "Engineering": "SW",
+                    "Manufacturing": "MFG",
+                },
+            },
+            "issues": [
+                {"linear_id": "ENG-1", "title": "Build it", "labels": ["SW", "Bug"]},
+                {"linear_id": "ENG-2", "title": "Make it", "labels": ["MFG"]},
+            ],
+        }
+    )
+    inp = from_json(s)
+    assert inp.config.linear_team_label_map == {
+        "Engineering": "SW",
+        "Manufacturing": "MFG",
+    }
+    assert inp.issues[0].labels == ["SW", "Bug"]
+    assert inp.issues[1].labels == ["MFG"]
 
 
 # --- to_json: output shapes --------------------------------------------------

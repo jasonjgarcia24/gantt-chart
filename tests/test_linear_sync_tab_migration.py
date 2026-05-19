@@ -23,6 +23,7 @@ import pytest
 
 from gantt_lib.linear.sync_tab import (
     PHASE1_HEADERS,
+    PHASE2_HEADERS,
     SYNC_HEADERS,
     SYNC_TAB,
     SyncTabSchemaError,
@@ -201,3 +202,90 @@ def test_unknown_header_raises_during_migrate():
 
     with pytest.raises(SyncTabSchemaError, match="cannot auto-migrate"):
         migrate_sync_tab(ss)
+
+
+# --- v2 → v3 migration (adds snapshot_team) ---------------------------------
+
+
+def _seed_phase2_tab(
+    ss: FakeSpreadsheet, *, data_rows: list[list[str]] | None = None
+) -> FakeWorksheet:
+    """Create a `_LinearSync` worksheet on `ss` with Phase-2 18-col shape
+    (no snapshot_team). Mimics an install upgraded to Phase-2 before
+    PR3 shipped."""
+    ws = FakeWorksheet(SYNC_TAB, sheet_id=98)
+    warning = ["DO NOT EDIT — Phase 2 warning row."] + [""] * (len(PHASE2_HEADERS) - 1)
+    ws.update(
+        "A1",
+        [PHASE2_HEADERS, warning],
+        value_input_option="USER_ENTERED",
+    )
+    if data_rows:
+        ws.update("A3", data_rows, value_input_option="USER_ENTERED")
+    ss.add_existing_worksheet(ws)
+    return ws
+
+
+def test_migrate_v2_to_v3_appends_snapshot_team_column():
+    """A Phase-2 tab (18 cols) auto-upgrades to the current 19-col schema
+    by appending `snapshot_team`. Existing data rows are preserved verbatim
+    in cols A-R; col S defaults to ""."""
+    ss = FakeSpreadsheet()
+    # Build a complete 18-col data row with realistic sidecar + snapshot vals.
+    row = [
+        "P1", "1", "TPM-1", "2026-05-01T00:00:00Z", "https://x/1",
+        "", "", "", "Engineering",  # sidecars
+        "Build it", "In Progress", "started", "alex@x.com",
+        "2026-06-15", "5", "", "", "",  # snapshots (9 cols, no team)
+    ]
+    assert len(row) == len(PHASE2_HEADERS)
+    _seed_phase2_tab(ss, data_rows=[row])
+
+    rows_migrated = migrate_sync_tab(ss)
+    assert rows_migrated == 1
+
+    ws = ss.worksheet(SYNC_TAB)
+    last_col = _last_col_letter(len(SYNC_HEADERS))
+    headers = ws.get_values(f"A1:{last_col}1")[0]
+    assert headers == SYNC_HEADERS  # 19 cols incl. snapshot_team
+
+    # Data round-trips cleanly with snapshot_team defaulting to "".
+    links = read_links(ss, "P1")
+    assert len(links) == 1
+    link = links[0]
+    assert link.snapshot_title == "Build it"
+    assert link.snapshot_assignee == "alex@x.com"
+    assert link.snapshot_team == ""  # new col, defaults blank
+
+
+def test_migrate_v2_to_v3_is_idempotent_on_current_schema():
+    """Running migrate on an already-current-schema tab returns 0."""
+    ss = FakeSpreadsheet()
+    ensure_sync_tab(ss)  # bootstraps current (v3) schema
+    assert migrate_sync_tab(ss) == 0
+
+
+def test_ensure_auto_migrates_phase2_tab_to_current_schema():
+    """ensure_sync_tab on a Phase-2 tab upgrades it in place."""
+    ss = FakeSpreadsheet()
+    _seed_phase2_tab(ss)
+    ws = ensure_sync_tab(ss)
+    last_col = _last_col_letter(len(SYNC_HEADERS))
+    headers = ws.get_values(f"A1:{last_col}1")[0]
+    assert headers == SYNC_HEADERS
+
+
+def test_migrate_v1_chains_through_to_v3():
+    """A pristine Phase-1 tab goes v1 → v2 → v3 in one migrate_sync_tab call."""
+    ss = FakeSpreadsheet()
+    _seed_phase1_tab(
+        ss,
+        data_rows=[["P1", "1", "TPM-1", "2026-05-01T00:00:00Z", "https://x/1"]],
+    )
+    rows_migrated = migrate_sync_tab(ss)
+    assert rows_migrated == 1
+
+    ws = ss.worksheet(SYNC_TAB)
+    last_col = _last_col_letter(len(SYNC_HEADERS))
+    headers = ws.get_values(f"A1:{last_col}1")[0]
+    assert headers == SYNC_HEADERS  # ends at current v3 schema

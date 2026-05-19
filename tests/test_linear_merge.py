@@ -124,11 +124,11 @@ def test_classify_field_respects_custom_equality():
         ("due_date", "linear"),
         ("parent", "linear"),
         ("milestone", "linear"),
+        ("team", "linear"),
         ("blockedby", "workbook"),
         ("predecessors", "workbook"),
         ("percent", "workbook"),
         ("notes", "workbook"),
-        ("team", "workbook"),
     ],
 )
 def test_resolve_conflict_per_field_winner(field, winner_source):

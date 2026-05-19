@@ -50,6 +50,10 @@ class CpInputConfig:
     linear_team: str = ""        # team name or id — required for create
     linear_project: str = ""     # project name or id — required for create
     linear_archive_state: str = ""  # state name to apply on archive (first canceled-type)
+    # workbook-team-name → Linear-label-name. Labels are how workbook
+    # teams round-trip into Linear (Linear has no per-issue team field
+    # at the granularity workbook needs). Empty map = team sync disabled.
+    linear_team_label_map: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -68,6 +72,11 @@ class CpInputIssue:
     # formula. Ignored by the cp/adapter (cascade math doesn't care). Empty
     # string when the agent didn't supply one.
     linear_url: str = ""
+    # Label names attached to the issue in Linear. Used by the team-sync
+    # path: workbook Team is derived by intersecting this with
+    # `CpInputConfig.linear_team_label_map.values()`. Order preserved so
+    # the snapshot survives label-set normalization.
+    labels: list = field(default_factory=list)
 
 
 @dataclass
@@ -174,6 +183,7 @@ def from_json(s: str) -> CpInput:
         linear_team=config_raw.get("linear_team", "") or "",
         linear_project=config_raw.get("linear_project", "") or "",
         linear_archive_state=config_raw.get("linear_archive_state", "") or "",
+        linear_team_label_map=dict(config_raw.get("linear_team_label_map") or {}),
     )
 
     issues_raw = raw.get("issues", []) or []
@@ -197,6 +207,7 @@ def from_json(s: str) -> CpInput:
                 is_milestone=bool(iss.get("is_milestone", False)),
                 parent_linear_id=iss.get("parent_linear_id"),
                 linear_url=iss.get("linear_url", "") or "",
+                labels=list(iss.get("labels") or []),
             )
         )
 

@@ -75,14 +75,15 @@ MERGEABLE_FIELDS: tuple[str, ...] = (
     "due_date",
     "blockedby",
     "parent",
+    "team",
 )
 
 # Default-policy field winners on true conflict. Per the spec table:
 LINEAR_WINS: frozenset[str] = frozenset({
-    "title", "state", "state_type", "assignee", "due_date", "parent", "milestone",
+    "title", "state", "state_type", "assignee", "due_date", "parent", "milestone", "team",
 })
 WORKBOOK_WINS: frozenset[str] = frozenset({
-    "blockedby", "predecessors", "percent", "notes", "team",
+    "blockedby", "predecessors", "percent", "notes",
 })
 # `estimate` is special: workbook wins ONLY if the workbook value is
 # non-default (non-zero, non-empty) — otherwise Linear wins. See
@@ -251,15 +252,25 @@ def workbook_task_to_snapshot(
         blockedby=_workbook_blockedby(task, linear_by_wbs),
         parent=_workbook_parent(task, workbook_tasks, linear_by_wbs),
         milestone="",  # workbook doesn't track milestone
+        team=task.team or "",
     )
 
 
 def cp_issue_to_snapshot(
-    issue: CpInputIssue, *, blockedby_ids: list[str], milestone_id: str = ""
+    issue: CpInputIssue,
+    *,
+    blockedby_ids: list[str],
+    milestone_id: str = "",
+    team_label_map: Optional[dict[str, str]] = None,
 ) -> IssueSnapshot:
     """Build a snapshot from the agent's normalized payload (current Linear).
     `blockedby_ids` and `milestone_id` must be supplied by the caller from
-    the surrounding payload context (edges + milestone list)."""
+    the surrounding payload context (edges + milestone list).
+    `team_label_map` (workbook-team → Linear-label-name) is used to
+    derive the workbook-equivalent team from the issue's labels.
+    """
+    from gantt_lib.linear.snapshot import derive_team_from_labels
+
     due_date = issue.end_anchor.isoformat() if issue.end_anchor else ""
     return IssueSnapshot(
         title=issue.title,
@@ -271,6 +282,7 @@ def cp_issue_to_snapshot(
         blockedby=",".join(blockedby_ids),
         parent=issue.parent_linear_id or "",
         milestone=milestone_id,
+        team=derive_team_from_labels(list(issue.labels or []), team_label_map or {}),
     )
 
 
@@ -422,6 +434,7 @@ def compute_sync_diff(
         linear_snap = cp_issue_to_snapshot(
             issue,
             blockedby_ids=blockers_by_linear.get(link.linear_id, []),
+            team_label_map=current_linear.config.linear_team_label_map,
         )
         stored_snap = sync_fields_to_snapshot(link)
         rows.append(_merge_row(

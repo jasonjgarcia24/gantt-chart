@@ -197,6 +197,7 @@ Build the JSON payload that the CLI expects. Field-by-field:
 | `config.linear_team` | the team name from `list_teams` (e.g. `"JasonGarcia"`) | **Required for Phase-2 create**. Empty string in Phase-1 pull-only mode |
 | `config.linear_project` | the project name from `list_projects` | **Required for Phase-2 create** |
 | `config.linear_archive_state` | first state of `type=="canceled"` from `list_issue_statuses` (e.g. `"Canceled"`) | **Required for Phase-2 archive**. If empty, archive requests are silently skipped |
+| `config.linear_team_label_map` | `{workbook_team_name: linear_label_name}` dict — populate from user-supplied mapping or workbook config | **Optional**. Enables Team ↔ Linear-labels bidirectional sync. Empty `{}` disables team sync (workbook Team becomes a sidecar-only field). |
 | `issues[].linear_id` | `issue.id` (e.g. `JAS-5`) | The Linear identifier, not the UUID |
 | `issues[].title` | `issue.title` | |
 | `issues[].state` | mapped from `issue.statusType` | See state mapping table — map by **type**, not name |
@@ -208,6 +209,7 @@ Build the JSON payload that the CLI expects. Field-by-field:
 | `issues[].is_milestone` | `false` for regular issues; `true` for synthesized milestone tasks | See milestone synthesis below |
 | `issues[].parent_linear_id` | `issue.parentId` or `null` | Stable identifier; CLI uses for WBS hierarchy |
 | `issues[].linear_url` | `issue.url` | Used by CLI for HYPERLINK formula on the name cell |
+| `issues[].labels` | `[lbl.name for lbl in issue.labels]` | List of label names. Required when `linear_team_label_map` is set so the merge engine can derive workbook Team. Pass `[]` (or omit) when team sync is off. |
 | `edges[]` | from `get_issue.relations.blockedBy` per issue | Each `blockedBy` item → `{from_linear_id, to_linear_id, type: "FS", lag_days: 0}` |
 
 **State mapping** (always by `statusType`, not `status` name):
@@ -239,6 +241,8 @@ synthetic issue to the payload:
 
 **Pagination** — if `list_issues.hasNextPage`, follow `cursor` and
 merge pages before invoking the CLI.
+
+**Team ↔ labels mapping** — when the user wants Team sync, fetch labels per team via `list_issue_labels(team=<team_name>)` and ask the user (or read from a workbook-side config) for the workbook-team → Linear-label correspondence. Populate `config.linear_team_label_map` accordingly. The team-label set must be mutually-exclusive: each issue should carry at most one team-label, or pull-side team derivation will silently pick the first-match.
 
 ### Dry-run-first + two-stage confirmation
 
