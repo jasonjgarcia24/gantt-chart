@@ -10,6 +10,7 @@ import pytest
 
 from gantt_lib import schema
 from gantt_lib.sheets import (
+    apply_default_team_cf,
     apply_grey_out_cf,
     apply_milestone_row_grey_out_cf,
     migrate_program_tab_v1_to_v2,
@@ -212,3 +213,41 @@ def test_apply_milestone_row_grey_out_cf_raises_on_missing_program():
     ss = FakeSpreadsheet()
     with pytest.raises(schema.ProgramTabSchemaError, match="not found"):
         apply_milestone_row_grey_out_cf(ss, "NOPE")
+
+
+# --- apply_default_team_cf --------------------------------------------------
+
+
+def test_apply_default_team_cf_emits_addConditionalFormatRule_batch():
+    """Patch path: a v2 tab gets one addConditionalFormatRule request
+    for the default-team timeline CF (blank-Team rows render with a
+    pastel-blue bar)."""
+    ss = FakeSpreadsheet()
+    _seed_v2_tab(ss)
+    apply_default_team_cf(ss, "TPM90")
+
+    cf_bodies = [
+        b for b in ss.batch_updates
+        if any("addConditionalFormatRule" in req for req in b.get("requests", []))
+    ]
+    assert len(cf_bodies) == 1
+    rule = cf_bodies[0]["requests"][0]["addConditionalFormatRule"]["rule"]
+    # Formula must reference col E (Team) being blank/empty.
+    formula = rule["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    assert "ISBLANK($E" in formula
+    assert '$E5=""' in formula
+
+
+def test_apply_default_team_cf_raises_on_v1_tab():
+    """v1 tabs have a different TIMELINE_FIRST_COL_IDX, so the CF range
+    + day-cell reference would land on the wrong column."""
+    ss = FakeSpreadsheet()
+    _seed_v1_tab(ss)
+    with pytest.raises(schema.ProgramTabSchemaError, match="migrate-schema"):
+        apply_default_team_cf(ss, "TPM90")
+
+
+def test_apply_default_team_cf_raises_on_missing_program():
+    ss = FakeSpreadsheet()
+    with pytest.raises(schema.ProgramTabSchemaError, match="not found"):
+        apply_default_team_cf(ss, "NOPE")

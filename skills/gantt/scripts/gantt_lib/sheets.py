@@ -294,6 +294,43 @@ def apply_milestone_row_grey_out_cf(ss, program_name: str) -> None:
     })
 
 
+def apply_default_team_cf(ss, program_name: str) -> None:
+    """Add the `default_team_color_cf_request` rule to an existing program
+    tab. Paints a pastel-blue background on timeline cells for any row
+    whose Team cell is blank — so rows without an assigned team still
+    render a visible bar on the Gantt timeline.
+
+    Requires v2 schema: the CF rule's range + formula reference the
+    timeline-first column index (col O on v2). Applied to a v1 tab the
+    rule would land on the wrong columns. Raises ProgramTabSchemaError
+    on v1 tabs so the caller migrates first.
+
+    NOT idempotent: re-running adds duplicate CF rules (cosmetic only —
+    same colour, same trigger).
+    """
+    tab_name = schema.program_tab_name(program_name)
+    try:
+        ws = ss.worksheet(tab_name)
+    except Exception as e:
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} not found (tab {tab_name!r})"
+        ) from e
+
+    header_row = ws.get_values("A4:O4")
+    header_cells = header_row[0] if header_row else []
+    version = schema.detect_program_tab_schema(header_cells)
+    if version != "v2":
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} is on {version!r} schema; the default-team "
+            "CF range references the v2 timeline-first column. Run "
+            f"`gantt program migrate-schema {program_name}` first."
+        )
+
+    ss.batch_update({
+        "requests": [schema.default_team_color_cf_request(ws.id)],
+    })
+
+
 def apply_grey_out_cf(ss, program_name: str) -> None:
     """Add the `linked_workbook_only_grey_out_cf_request` rule to an
     existing program tab. New programs already get this rule at create

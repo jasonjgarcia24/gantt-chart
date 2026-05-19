@@ -519,6 +519,22 @@ def cmd_program_patch_milestone_greyout_cf(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_program_patch_default_team_cf(args: argparse.Namespace) -> int:
+    """Retro-patch the default-team CF rule onto an existing program tab.
+    Paints a pastel-blue bar on the Gantt timeline for any row whose
+    Team cell is blank — so teamless rows still render."""
+    from gantt_lib import schema, sheets
+
+    ss = _open_workbook()
+    try:
+        sheets.apply_default_team_cf(ss, args.name)
+    except schema.ProgramTabSchemaError as e:
+        die(str(e))
+
+    ok(f"program {args.name} patch-default-team-cf — default-team CF rule added")
+    return 0
+
+
 def cmd_program_migrate_schema(args: argparse.Namespace) -> int:
     """Upgrade an existing program tab from v1 (13-col) to v2 (14-col,
     adds Milestone Link). Idempotent — no-op on v2 tabs."""
@@ -1196,6 +1212,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pmgo.add_argument("name", help="program short name (the P_<name> tab to patch)")
     p_pmgo.set_defaults(func=cmd_program_patch_milestone_greyout_cf)
+
+    p_pdt = p_program_sub.add_parser(
+        "patch-default-team-cf",
+        help="retro-patch the default-team timeline CF (pastel blue bar for blank-team rows)",
+    )
+    p_pdt.add_argument("name", help="program short name (the P_<name> tab to patch)")
+    p_pdt.set_defaults(func=cmd_program_patch_default_team_cf)
 
     # ---------- task add / update / delete ----------
 
