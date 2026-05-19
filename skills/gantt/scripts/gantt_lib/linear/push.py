@@ -43,6 +43,7 @@ from gantt_lib.linear.merge import (
 
 # Full MCP tool path so the agent's dispatcher can route directly.
 SAVE_ISSUE_TOOL = "mcp__claude_ai_Linear__save_issue"
+SAVE_MILESTONE_TOOL = "mcp__claude_ai_Linear__save_milestone"
 
 
 @dataclass(frozen=True)
@@ -257,6 +258,75 @@ def _build_update_request(
         tool=SAVE_ISSUE_TOOL,
         kwargs=kwargs,
         description=f"update {row.linear_id} ({row.title})",
+        pass_number=1,
+    )
+
+
+# Translation table for workbook field name → save_milestone kwarg name.
+# Only the two milestone-round-trippable fields (per Linear's
+# ProjectMilestone schema) are mapped; everything else on a milestone
+# row is `MILESTONE_WORKBOOK_PROTECTED` and never reaches push anyway.
+_MILESTONE_FIELD_KWARG: dict[str, str] = {
+    "title": "name",
+    "due_date": "targetDate",
+}
+
+
+def _build_milestone_update_request(
+    row: SyncRowDiff,
+    *,
+    linear_project: str,
+) -> Optional[MCPRequest]:
+    """Build the pass-1 save_milestone request for an MS- update row.
+
+    Linear's milestone API lives at a separate endpoint from issues —
+    `save_issue(id="MS-…")` always 404s ("Entity not found: Issue").
+    This routes MS- rows to `save_milestone(id=<uuid>, project=…)`
+    instead, translating workbook fields:
+
+      - `title` → `name`
+      - `due_date` → `targetDate` (None to clear)
+
+    Other workbook fields on milestone rows are filtered out by
+    `MILESTONE_WORKBOOK_PROTECTED` at merge time, so they never appear
+    in `row.field_changes` and don't need handling here.
+
+    Returns None if no milestone-mappable field was actually pushed
+    (e.g. only Linear-wins resolutions).
+    """
+    if not row.linear_id.startswith("MS-"):
+        return None
+    if row.action != "update":
+        return None
+
+    ms_uuid = row.linear_id[3:]
+    kwargs: dict[str, Any] = {}
+    for fc in row.field_changes:
+        outbound = (
+            fc.classification == FieldClassification.PUSH
+            or (
+                fc.classification == FieldClassification.CONFLICT
+                and fc.resolved_to_source == "workbook"
+            )
+        )
+        if not outbound:
+            continue
+        ms_key = _MILESTONE_FIELD_KWARG.get(fc.field)
+        if ms_key is None:
+            continue
+        value = fc.resolved_to_value
+        if ms_key == "targetDate":
+            kwargs[ms_key] = str(value) if value else None
+        else:
+            kwargs[ms_key] = str(value or "")
+
+    if not kwargs:
+        return None
+    kwargs = {"id": ms_uuid, "project": linear_project, **kwargs}
+    return MCPRequest(
+        tool=SAVE_MILESTONE_TOOL,
+        kwargs=kwargs,
+        description=f"update milestone {row.linear_id} ({row.title})",
         pass_number=1,
     )
 
@@ -489,13 +559,21 @@ def build_push_requests(
     new_linear_id_by_wbs: dict[str, str] = {}
     for row in diff.rows:
         if row.action == "update":
-            issue = issues_by_id.get(row.linear_id)
-            current_labels = list(issue.labels) if issue else []
-            req = _build_update_request(
-                row,
-                current_labels=current_labels,
-                team_label_map=team_label_map,
-            )
+            # MS- rows are milestones — route to save_milestone, NOT
+            # save_issue (Linear's milestone API is a separate endpoint;
+            # save_issue with an MS- id always 404s).
+            if row.linear_id.startswith("MS-"):
+                req = _build_milestone_update_request(
+                    row, linear_project=linear_project,
+                )
+            else:
+                issue = issues_by_id.get(row.linear_id)
+                current_labels = list(issue.labels) if issue else []
+                req = _build_update_request(
+                    row,
+                    current_labels=current_labels,
+                    team_label_map=team_label_map,
+                )
             if req is not None:
                 pass1.append(req)
         elif row.action == "create":

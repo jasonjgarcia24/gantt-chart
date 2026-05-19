@@ -22,6 +22,7 @@ from gantt_lib.linear.merge import (
 )
 from gantt_lib.linear.push import (
     SAVE_ISSUE_TOOL,
+    SAVE_MILESTONE_TOOL,
     MCPRequest,
     _placeholder_for,
     build_push_requests,
@@ -711,4 +712,130 @@ def test_milestone_membership_push_inactive_without_optional_args():
     per-row push path still works)."""
     reqs = _build([])  # _build doesn't pass the new optional args
     assert reqs == []
+
+
+# --- MS- update routing through save_milestone -------------------------------
+
+
+def test_ms_update_due_date_routes_to_save_milestone_targetDate():
+    """Linear's milestone API lives at save_milestone, not save_issue —
+    save_issue with MS- id always 404s. Verify due_date push on an MS-
+    row produces a save_milestone call with `targetDate`, MS- prefix
+    stripped from the id, and the project name attached."""
+    row = _mk_update_row(
+        wbs_id="6",
+        linear_id="MS-abc-def-ghi",
+        title="v1.0 launch",
+        field_changes=[
+            _fc("due_date", "2026-06-15", "2026-06-01", "2026-06-01",
+                FieldClassification.PUSH, "2026-06-15", "workbook"),
+        ],
+    )
+    reqs = _build([row], project="Gantt Skill Test")
+    assert len(reqs) == 1
+    assert reqs[0].tool == SAVE_MILESTONE_TOOL
+    assert reqs[0].kwargs == {
+        "id": "abc-def-ghi",            # MS- prefix stripped
+        "project": "Gantt Skill Test",  # required by save_milestone
+        "targetDate": "2026-06-15",     # due_date → targetDate
+    }
+
+
+def test_ms_update_title_routes_to_save_milestone_name():
+    """`title` field on a milestone row maps to `name` in save_milestone."""
+    row = _mk_update_row(
+        wbs_id="6",
+        linear_id="MS-uuid",
+        title="renamed launch",
+        field_changes=[
+            _fc("title", "renamed launch", "v1.0 launch", "v1.0 launch",
+                FieldClassification.PUSH, "renamed launch", "workbook"),
+        ],
+    )
+    reqs = _build([row], project="P")
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {
+        "id": "uuid",
+        "project": "P",
+        "name": "renamed launch",
+    }
+
+
+def test_ms_update_emits_save_milestone_with_both_fields():
+    """Both title + due_date changing on the same milestone collapse
+    into a single save_milestone call."""
+    row = _mk_update_row(
+        wbs_id="6", linear_id="MS-xyz", title="renamed",
+        field_changes=[
+            _fc("title", "renamed", "old", "old",
+                FieldClassification.PUSH, "renamed", "workbook"),
+            _fc("due_date", "2026-07-01", "2026-06-01", "2026-06-01",
+                FieldClassification.PUSH, "2026-07-01", "workbook"),
+        ],
+    )
+    reqs = _build([row], project="P")
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {
+        "id": "xyz", "project": "P",
+        "name": "renamed", "targetDate": "2026-07-01",
+    }
+
+
+def test_ms_update_clearing_due_date_emits_targetDate_null():
+    """Workbook cleared the End cell on a milestone row → push
+    targetDate=null so Linear clears its milestone date too."""
+    row = _mk_update_row(
+        wbs_id="6", linear_id="MS-xyz", title="v1",
+        field_changes=[
+            _fc("due_date", "", "2026-06-01", "2026-06-01",
+                FieldClassification.PUSH, "", "workbook"),
+        ],
+    )
+    reqs = _build([row], project="P")
+    assert len(reqs) == 1
+    assert reqs[0].kwargs == {"id": "xyz", "project": "P", "targetDate": None}
+
+
+def test_ms_update_skips_when_only_pull_changes():
+    """If every field change on the MS row is PULL (Linear wins), no
+    push request is emitted — same as the regular update path."""
+    row = _mk_update_row(
+        wbs_id="6", linear_id="MS-xyz", title="v1",
+        field_changes=[
+            _fc("title", "v1", "v1", "v1.1",
+                FieldClassification.PULL, "v1.1", "linear"),
+        ],
+    )
+    reqs = _build([row], project="P")
+    assert reqs == []
+
+
+def test_ms_update_does_not_emit_save_issue():
+    """Regression guard: prior to this fix, MS- rows produced
+    save_issue calls that always 404'd ("Entity not found: Issue").
+    Confirm no save_issue request is ever emitted for an MS- row."""
+    row = _mk_update_row(
+        wbs_id="6", linear_id="MS-xyz", title="v1",
+        field_changes=[
+            _fc("due_date", "2026-06-15", "2026-06-01", "2026-06-01",
+                FieldClassification.PUSH, "2026-06-15", "workbook"),
+        ],
+    )
+    reqs = _build([row], project="P")
+    assert all(r.tool != SAVE_ISSUE_TOOL for r in reqs)
+
+
+def test_non_ms_update_still_routes_to_save_issue():
+    """Sanity: regular IBO-X rows continue to use save_issue."""
+    row = _mk_update_row(
+        wbs_id="1", linear_id="IBO-5", title="Spec optics",
+        field_changes=[
+            _fc("due_date", "2026-06-15", "2026-06-01", "2026-06-01",
+                FieldClassification.PUSH, "2026-06-15", "workbook"),
+        ],
+    )
+    reqs = _build([row], project="P")
+    assert len(reqs) == 1
+    assert reqs[0].tool == SAVE_ISSUE_TOOL
+    assert reqs[0].kwargs == {"id": "IBO-5", "dueDate": "2026-06-15"}
 
