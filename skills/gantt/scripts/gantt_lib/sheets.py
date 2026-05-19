@@ -260,16 +260,54 @@ def migrate_program_tab_v1_to_v2(ss, program_name: str) -> str:
     return "v2"
 
 
+def _delete_cf_rules_matching_formula(ss, ws, formula_substring: str) -> int:
+    """Delete every conditional-format rule on `ws` whose CUSTOM_FORMULA
+    contains `formula_substring`. Returns the count of rules deleted.
+
+    Iterates by rule index; Sheets returns CF rules in declaration order
+    and deleting one shifts later indices down by one — so we delete
+    from highest index to lowest to keep the indices stable.
+
+    Used to make `apply_*_cf` patches idempotent: re-running a patch
+    after the rule shape changes (e.g. new columns added) deletes the
+    stale rule before adding the new one, instead of stacking duplicates.
+    """
+    metadata = ss.fetch_sheet_metadata(params={"includeGridData": False})
+    target_sheet = next(
+        s for s in metadata["sheets"] if s["properties"]["sheetId"] == ws.id
+    )
+    cf_rules = target_sheet.get("conditionalFormats", [])
+    indices_to_delete: list[int] = []
+    for idx, rule in enumerate(cf_rules):
+        boolean = rule.get("booleanRule") or {}
+        condition = boolean.get("condition") or {}
+        if condition.get("type") != "CUSTOM_FORMULA":
+            continue
+        values = condition.get("values") or []
+        formula = values[0].get("userEnteredValue", "") if values else ""
+        if formula_substring in formula:
+            indices_to_delete.append(idx)
+    if not indices_to_delete:
+        return 0
+    requests = [
+        {"deleteConditionalFormatRule": {"sheetId": ws.id, "index": idx}}
+        for idx in reversed(indices_to_delete)
+    ]
+    ss.batch_update({"requests": requests})
+    return len(indices_to_delete)
+
+
 def apply_milestone_row_grey_out_cf(ss, program_name: str) -> None:
-    """Add the `milestone_row_grey_out_cf_request` rule to an existing
-    program tab. Greys out fields that don't apply to milestone rows
-    (Duration, % Complete, Milestone Link).
+    """Apply the `milestone_row_grey_out_cf_request` rule to a program tab.
+
+    Idempotent: deletes any pre-existing CF rule whose trigger formula
+    matches the milestone-row pattern (`$L<row>=TRUE`) before adding the
+    fresh rule. Lets retro-patches re-run cleanly when the rule shape
+    changes (e.g. extended column coverage) without duplicating.
 
     Requires v2 schema (the formula references col M = Milestone Link,
     which only exists post-PR2b). Raises ProgramTabSchemaError on v1
     tabs.
-
-    NOT idempotent: re-running adds duplicate CF rules.
     """
     tab_name = schema.program_tab_name(program_name)
     try:
@@ -289,6 +327,12 @@ def apply_milestone_row_grey_out_cf(ss, program_name: str) -> None:
             f"on v2. Run `gantt program migrate-schema {program_name}` first."
         )
 
+    # Delete any prior milestone-row CF rule; the trigger formula is
+    # unique enough ($L<row>=TRUE on the FIRST_TASK_ROW anchor) that
+    # substring match safely identifies our rule.
+    _delete_cf_rules_matching_formula(
+        ss, ws, f"$L{schema.FIRST_TASK_ROW}=TRUE",
+    )
     ss.batch_update({
         "requests": [schema.milestone_row_grey_out_cf_request(ws.id)],
     })
@@ -332,18 +376,17 @@ def apply_default_team_cf(ss, program_name: str) -> None:
 
 
 def apply_grey_out_cf(ss, program_name: str) -> None:
-    """Add the `linked_workbook_only_grey_out_cf_request` rule to an
-    existing program tab. New programs already get this rule at create
-    time (PR2); this function retro-patches it onto tabs that predate
-    PR2 (LINEAR_TEST, TPM90, Tahoma).
+    """Apply the `linked_workbook_only_grey_out_cf_request` rule to a
+    program tab.
+
+    Idempotent: deletes any pre-existing CF rule whose trigger formula
+    matches the linked-row pattern (`ISFORMULA($C<row>)`) before adding
+    the fresh rule. Lets retro-patches re-run cleanly when the rule
+    shape changes (e.g. extended column coverage) without duplicating.
 
     Requires v2 schema — the grey-out formula assumes the post-PR2b
     column layout (% Complete at idx 8, Notes at idx 13). Raises
     ProgramTabSchemaError on v1 tabs so the caller migrates first.
-
-    NOT idempotent: re-running adds duplicate CF rules (cosmetic only —
-    they evaluate to the same colour, but they clutter the rule list).
-    Designed for one-off retro-patch use.
     """
     tab_name = schema.program_tab_name(program_name)
     try:
@@ -363,6 +406,11 @@ def apply_grey_out_cf(ss, program_name: str) -> None:
             f"{program_name}` first."
         )
 
+    # Delete any prior linked-row CF rule; the trigger formula
+    # ISFORMULA($C<row>) on the anchor row is unique to our rule.
+    _delete_cf_rules_matching_formula(
+        ss, ws, f"ISFORMULA(${schema.COL_NAME_LETTER}{schema.FIRST_TASK_ROW})",
+    )
     ss.batch_update({
         "requests": [schema.linked_workbook_only_grey_out_cf_request(ws.id)],
     })

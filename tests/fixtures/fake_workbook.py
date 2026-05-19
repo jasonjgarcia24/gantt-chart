@@ -114,6 +114,9 @@ class FakeSpreadsheet:
         self._sheets: dict[str, FakeWorksheet] = {}
         self.batch_updates: list[dict] = []
         self._next_id = 1
+        # CF rules per sheet id, in declaration order. Mutated by
+        # batch_update for addConditionalFormatRule / deleteConditionalFormatRule.
+        self._cf_rules_by_sheet: dict[int, list[dict]] = {}
 
     def worksheet(self, title: str) -> FakeWorksheet:
         if title not in self._sheets:
@@ -138,12 +141,35 @@ class FakeSpreadsheet:
         ws.spreadsheet = self
         self._sheets[ws.title] = ws
 
+    def fetch_sheet_metadata(self, params: dict = None):
+        """Minimal metadata stub.
+
+        Returns one sheet entry per worksheet with `properties.sheetId`,
+        `rowGroups` (always []), and `conditionalFormats` — tracked across
+        `batch_update` calls that include `addConditionalFormatRule` or
+        `deleteConditionalFormatRule` requests. Lets tests for the
+        idempotent retro-patch path (delete-then-add CF rules) verify
+        behavior end-to-end.
+        """
+        return {
+            "sheets": [
+                {
+                    "properties": {"sheetId": w.id, "title": w.title},
+                    "rowGroups": [],
+                    "conditionalFormats": list(self._cf_rules_by_sheet.get(w.id, [])),
+                }
+                for w in self._sheets.values()
+            ]
+        }
+
     def batch_update(self, body: dict):
         """Record the request body and apply any side-effecting requests we model.
 
         Currently honors:
         - `deleteDimension` for ROWS (baseline-clear path)
         - `insertDimension` for COLUMNS (program-tab schema migration)
+        - `addConditionalFormatRule` and `deleteConditionalFormatRule`
+          (CF retro-patch idempotency)
         Other request types (formatting, mergeCells, etc.) are recorded
         but not applied.
         """
@@ -181,3 +207,22 @@ class FakeSpreadsheet:
                     for _ in range(delta):
                         if len(row) >= start:
                             row.insert(start, "")
+                continue
+
+            add_cf = req.get("addConditionalFormatRule")
+            if add_cf:
+                rule = add_cf.get("rule") or {}
+                ranges = rule.get("ranges") or []
+                sheet_id = ranges[0].get("sheetId") if ranges else None
+                if sheet_id is None:
+                    continue
+                self._cf_rules_by_sheet.setdefault(sheet_id, []).append(rule)
+                continue
+
+            del_cf = req.get("deleteConditionalFormatRule")
+            if del_cf:
+                sheet_id = del_cf.get("sheetId")
+                idx = del_cf.get("index")
+                rules = self._cf_rules_by_sheet.get(sheet_id, [])
+                if 0 <= idx < len(rules):
+                    rules.pop(idx)

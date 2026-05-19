@@ -163,6 +163,30 @@ def test_apply_grey_out_cf_emits_addConditionalFormatRule_batch():
     ])
 
 
+def test_apply_grey_out_cf_idempotent_replaces_existing_rule():
+    """Re-running the patch deletes the prior linked-row CF rule
+    (matched by trigger formula) before adding the fresh one — so the
+    final tab has exactly one rule, not duplicates. Lets ops re-run
+    after rule shape changes (e.g. extended column coverage) without
+    cluttering the rule list."""
+    ss = FakeSpreadsheet()
+    _seed_v2_tab(ss)
+    apply_grey_out_cf(ss, "TPM90")
+    apply_grey_out_cf(ss, "TPM90")  # second run
+    apply_grey_out_cf(ss, "TPM90")  # third run, for good measure
+    # FakeSpreadsheet tracks live CF state across batch_updates.
+    metadata = ss.fetch_sheet_metadata()
+    ws = ss.worksheet(schema.program_tab_name("TPM90"))
+    target = next(s for s in metadata["sheets"] if s["properties"]["sheetId"] == ws.id)
+    cf_rules = target["conditionalFormats"]
+    matching = [
+        r for r in cf_rules
+        if r.get("booleanRule", {}).get("condition", {}).get("type") == "CUSTOM_FORMULA"
+        and "ISFORMULA" in r["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    ]
+    assert len(matching) == 1
+
+
 def test_apply_grey_out_cf_raises_on_v1_tab():
     """Grey-out formula assumes v2 column positions (Notes at idx 13).
     On a v1 tab Notes is still at idx 12, so the rule would target the
@@ -212,6 +236,27 @@ def test_apply_milestone_row_grey_out_cf_emits_addConditionalFormatRule_batch():
     # Trigger references col L (Milestone?).
     formula = rule["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
     assert "$L" in formula and "TRUE" in formula
+
+
+def test_apply_milestone_row_grey_out_cf_idempotent_replaces_existing_rule():
+    """Re-running deletes the prior milestone-row CF rule (matched by
+    `$L<row>=TRUE` trigger) before adding the fresh one — final tab has
+    exactly one rule."""
+    ss = FakeSpreadsheet()
+    _seed_v2_tab(ss)
+    apply_milestone_row_grey_out_cf(ss, "TPM90")
+    apply_milestone_row_grey_out_cf(ss, "TPM90")
+    metadata = ss.fetch_sheet_metadata()
+    ws = ss.worksheet(schema.program_tab_name("TPM90"))
+    target = next(s for s in metadata["sheets"] if s["properties"]["sheetId"] == ws.id)
+    cf_rules = target["conditionalFormats"]
+    matching = [
+        r for r in cf_rules
+        if r.get("booleanRule", {}).get("condition", {}).get("type") == "CUSTOM_FORMULA"
+        and "$L" in r["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+        and "TRUE" in r["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    ]
+    assert len(matching) == 1
 
 
 def test_apply_milestone_row_grey_out_cf_raises_on_v1_tab():
