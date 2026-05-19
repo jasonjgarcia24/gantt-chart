@@ -36,6 +36,10 @@ class FakeWorksheet:
         self.title = title
         self.id = sheet_id
         self.rows: list[list[str]] = []
+        # Back-reference to the parent FakeSpreadsheet, mimicking
+        # gspread.Worksheet.spreadsheet. Set by FakeSpreadsheet.add_worksheet
+        # and add_existing_worksheet. None on standalone fakes.
+        self.spreadsheet = None
 
     def _ensure_row(self, n_1based: int) -> list[str]:
         while len(self.rows) < n_1based:
@@ -123,6 +127,7 @@ class FakeSpreadsheet:
         if title in self._sheets:
             raise Exception(f"FakeSpreadsheet: duplicate sheet {title!r}")
         ws = FakeWorksheet(title, sheet_id=self._next_id)
+        ws.spreadsheet = self
         self._next_id += 1
         self._sheets[title] = ws
         return ws
@@ -130,6 +135,7 @@ class FakeSpreadsheet:
     def add_existing_worksheet(self, ws: FakeWorksheet):
         if ws.title in self._sheets:
             raise ValueError(f"already have sheet {ws.title!r}")
+        ws.spreadsheet = self
         self._sheets[ws.title] = ws
 
     def batch_update(self, body: dict):

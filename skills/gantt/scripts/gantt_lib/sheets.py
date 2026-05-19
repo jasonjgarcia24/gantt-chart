@@ -78,6 +78,14 @@ def read_program_tasks_with_rows(ws) -> list[tuple[Task, int, list[str]]]:
     `ProgramTabSchemaError` when the tab is on an older schema (v1, no
     Milestone Link column) — prevents silent data corruption from the
     PR2b column shift.
+
+    Joins each task with the `_LinearSync` tab (best-effort, side-effect-free)
+    so `task.linear_url` is populated for any task linked to a Linear issue.
+    This is what lets `update_task_data` re-render the HYPERLINK formula in
+    the Name column on subsequent writes — without the join, gspread reads
+    return the rendered text of `=HYPERLINK(...)` formulas as plain strings,
+    `task.linear_url` stays None, and the next write would clobber the
+    formula with plain text (breaking the grey-out CF among other things).
     """
     header_row = ws.get_values("A4:O4")  # row 4 = data header row (post-PR2b: 14 cols + extras)
     header_cells = header_row[0] if header_row else []
@@ -90,7 +98,58 @@ def read_program_tasks_with_rows(ws) -> list[tuple[Task, int, list[str]]]:
         if not row or not row[0].strip():
             continue
         out.append((Task.from_row(row), FIRST_DATA_ROW + offset, list(row)))
+
+    url_by_wbs = _read_linear_urls_by_wbs(ws)
+    if url_by_wbs:
+        for task, _row_idx, _raw in out:
+            url = url_by_wbs.get(task.id)
+            if url:
+                task.linear_url = url
+
     return out
+
+
+def _read_linear_urls_by_wbs(ws) -> dict[str, str]:
+    """Best-effort: return `{wbs_id: linear_url}` for tasks on this program
+    that are linked to Linear. Returns `{}` when:
+      - the worksheet has no `spreadsheet` back-reference (standalone fixture)
+      - the workbook has no `_LinearSync` tab yet (Phase-1 install)
+      - any error occurs reading or parsing the tab (degrade gracefully)
+
+    Never raises and never has side effects — does NOT auto-create the
+    sync tab, so recalc / baseline / task mutations don't grow a hidden
+    sidecar on workbooks that aren't using Linear sync.
+    """
+    ss = getattr(ws, "spreadsheet", None)
+    if ss is None:
+        return {}
+    try:
+        from gantt_lib.linear.sync_tab import SYNC_TAB, read_links
+    except Exception:
+        return {}
+    # Probe for the tab without creating it.
+    try:
+        existing_titles = {w.title for w in ss.worksheets()}
+    except Exception:
+        return {}
+    if SYNC_TAB not in existing_titles:
+        return {}
+    program = _program_name_from_tab_title(ws.title)
+    if not program:
+        return {}
+    try:
+        links = read_links(ss, program)
+    except Exception:
+        return {}
+    return {l.wbs_id: l.linear_url for l in links if l.linear_url}
+
+
+def _program_name_from_tab_title(tab_title: str) -> str:
+    """`P_TPM90` → `TPM90`. Returns "" if the title doesn't carry the
+    program-tab prefix (e.g. `_Config`, `_Baselines`, `_LinearSync`)."""
+    if tab_title.startswith(schema.PROGRAM_TAB_PREFIX):
+        return tab_title[len(schema.PROGRAM_TAB_PREFIX):]
+    return ""
 
 
 def find_task_row(ws, task_id: str) -> Optional[int]:
