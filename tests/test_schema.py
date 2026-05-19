@@ -25,6 +25,7 @@ from gantt_lib.schema import (
     STATUS_VALUES,
     TIMELINE_DAYS,
     WEEK_HEADER_ROW,
+    MILESTONE_ROW_GREY,
     WORKBOOK_ONLY_GREY,
     ProgramTabSchemaError,
     assert_program_tab_v2,
@@ -411,12 +412,14 @@ def test_milestone_row_grey_out_cf_triggers_on_milestone_checkbox():
     assert f"$L{FIRST_TASK_ROW}=TRUE" in formula
 
 
-def test_milestone_row_grey_out_cf_uses_workbook_only_grey():
-    """Same shade as the linked-row grey-out, since both signal 'this
-    field doesn't apply / won't sync — probably don't edit'."""
+def test_milestone_row_grey_out_cf_uses_distinct_darker_grey():
+    """Uses MILESTONE_ROW_GREY (distinctly darker than WORKBOOK_ONLY_GREY)
+    so milestone rows visually pop relative to linked-row greying."""
     req = milestone_row_grey_out_cf_request(sheet_id=42)
     color = req["addConditionalFormatRule"]["rule"]["booleanRule"]["format"]["backgroundColor"]
-    assert color == WORKBOOK_ONLY_GREY
+    assert color == MILESTONE_ROW_GREY
+    # Verify it's actually darker than the workbook-only grey (sanity check).
+    assert color["red"] < WORKBOOK_ONLY_GREY["red"]
 
 
 def test_milestone_row_grey_out_cf_accepts_extra_columns():
