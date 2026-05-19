@@ -130,13 +130,15 @@ def test_milestone_defaults_false_for_non_truthy(flag):
 def test_status_values_are_documented():
     # Sanity check on the enum so anyone changing it has to update tests.
     assert Status.NOT_STARTED == "Not Started"
+    assert Status.PLANNED == "Planned"
     assert Status.IN_PROGRESS == "In Progress"
     assert Status.BLOCKED == "Blocked"
     assert Status.AT_RISK == "At Risk"
     assert Status.DONE == "Done"
     assert Status.CANCELLED == "Cancelled"
     assert set(Status.all()) == {
-        "Not Started", "In Progress", "Blocked", "At Risk", "Done", "Cancelled",
+        "Not Started", "Planned", "In Progress", "Blocked",
+        "At Risk", "Done", "Cancelled",
     }
 
 

@@ -112,7 +112,8 @@ def test_data_headers_match_v2_schema():
 
 def test_status_values_match_full_enum():
     assert STATUS_VALUES == [
-        "Not Started", "In Progress", "Blocked", "At Risk", "Done", "Cancelled",
+        "Not Started", "Planned", "In Progress", "Blocked",
+        "At Risk", "Done", "Cancelled",
     ]
 
 

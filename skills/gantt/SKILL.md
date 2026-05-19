@@ -226,10 +226,17 @@ Build the JSON payload that the CLI expects. Field-by-field:
 | Linear `statusType` | Workbook `state` |
 |---|---|
 | `backlog` | `Not Started` |
-| `unstarted` | `Not Started` |
+| `unstarted` | `Planned` |
 | `started` | `In Progress` |
 | `completed` | `Done` |
 | `canceled` | `Cancelled` |
+
+The workbook has additional state vocabulary that doesn't round-trip from
+Linear: `Blocked` and `At Risk` are workbook-local flags. They get pushed
+to Linear as `In Progress` (Blocked) or `In Progress`/`Backlog` (At Risk,
+depending on whether start ≤ today). On pull, Linear's `In Progress`
+collapses to workbook `In Progress` — losing the Blocked/At Risk flag.
+Users who care about preserving those flags re-set them after sync.
 
 **Estimate unit detection** — read the first non-null `estimate.name`:
 

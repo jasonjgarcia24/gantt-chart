@@ -28,6 +28,7 @@ class Status:
     preservation carve-out.
     """
     NOT_STARTED = "Not Started"
+    PLANNED = "Planned"
     IN_PROGRESS = "In Progress"
     BLOCKED = "Blocked"
     AT_RISK = "At Risk"
@@ -37,8 +38,8 @@ class Status:
     @classmethod
     def all(cls) -> list[str]:
         return [
-            cls.NOT_STARTED, cls.IN_PROGRESS, cls.BLOCKED, cls.AT_RISK,
-            cls.DONE, cls.CANCELLED,
+            cls.NOT_STARTED, cls.PLANNED, cls.IN_PROGRESS, cls.BLOCKED,
+            cls.AT_RISK, cls.DONE, cls.CANCELLED,
         ]
 
 

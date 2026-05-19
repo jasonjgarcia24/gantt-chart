@@ -121,3 +121,33 @@ def test_cancelled_status_included_in_enum():
     """Sanity check: Cancelled is in the canonical Status set."""
     assert Status.CANCELLED == "Cancelled"
     assert Status.CANCELLED in Status.all()
+
+
+# ---------- Planned preservation ----------
+
+
+def test_planned_status_preserved_at_zero_percent():
+    """Planned is a user-set "queued / next-up" flag. At pct=0 (most of
+    its lifetime), rule 2 would normally rewrite it to Not Started —
+    silently destroying the user's intent. Carve-out preserves it."""
+    t = _t("1", pct=0, status=Status.PLANNED)
+    assert compute_status(t, {"1": t}, TODAY) == Status.PLANNED
+
+
+def test_planned_status_promoted_to_in_progress_when_work_starts():
+    """Once pct > 0, Planned no longer applies — the cascade naturally
+    transitions to In Progress (or Blocked if a predecessor is late)."""
+    t = _t("1", pct=25, start=PAST, status=Status.PLANNED)
+    assert compute_status(t, {"1": t}, TODAY) == Status.IN_PROGRESS
+
+
+def test_planned_status_promoted_to_done_at_full_pct():
+    """Planned doesn't override the Done rule — pct=100 always wins."""
+    t = _t("1", pct=100, status=Status.PLANNED)
+    assert compute_status(t, {"1": t}, TODAY) == Status.DONE
+
+
+def test_planned_status_included_in_enum():
+    """Sanity check: Planned is in the canonical Status set."""
+    assert Status.PLANNED == "Planned"
+    assert Status.PLANNED in Status.all()

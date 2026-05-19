@@ -338,6 +338,42 @@ def apply_milestone_row_grey_out_cf(ss, program_name: str) -> None:
     })
 
 
+def apply_status_dropdown(ss, program_name: str) -> None:
+    """Re-apply the Status column data-validation dropdown on an
+    existing program tab. Idempotent: setDataValidation replaces any
+    existing rule on the same range.
+
+    Use after adding/removing values from `Status.all()` so existing
+    tabs pick up the new dropdown options without recreating the tab.
+
+    Requires v2 schema (the validation range references COL_STATUS_IDX
+    which differs between v1 and v2 — though for Status specifically
+    the column position didn't shift, the v2 guard keeps this consistent
+    with the other patch commands).
+    """
+    tab_name = schema.program_tab_name(program_name)
+    try:
+        ws = ss.worksheet(tab_name)
+    except Exception as e:
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} not found (tab {tab_name!r})"
+        ) from e
+
+    header_row = ws.get_values("A4:O4")
+    header_cells = header_row[0] if header_row else []
+    version = schema.detect_program_tab_schema(header_cells)
+    if version != "v2":
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} is on {version!r} schema; the status "
+            "dropdown patch assumes v2 column layout. Run "
+            f"`gantt program migrate-schema {program_name}` first."
+        )
+
+    ss.batch_update({
+        "requests": [schema.status_validation_request(ws.id)],
+    })
+
+
 def apply_default_team_cf(ss, program_name: str) -> None:
     """Add the `default_team_color_cf_request` rule to an existing program
     tab. Paints a pastel-blue background on timeline cells for any row

@@ -535,6 +535,22 @@ def cmd_program_patch_default_team_cf(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_program_patch_status_dropdown(args: argparse.Namespace) -> int:
+    """Re-apply the Status column data-validation dropdown on an existing
+    program tab. Use after Status enum changes (e.g. adding `Planned`)
+    so existing tabs pick up the new options. Idempotent."""
+    from gantt_lib import schema, sheets
+
+    ss = _open_workbook()
+    try:
+        sheets.apply_status_dropdown(ss, args.name)
+    except schema.ProgramTabSchemaError as e:
+        die(str(e))
+
+    ok(f"program {args.name} patch-status-dropdown — Status dropdown refreshed")
+    return 0
+
+
 def cmd_program_migrate_schema(args: argparse.Namespace) -> int:
     """Upgrade an existing program tab from v1 (13-col) to v2 (14-col,
     adds Milestone Link). Idempotent — no-op on v2 tabs."""
@@ -1214,6 +1230,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pdt.add_argument("name", help="program short name (the P_<name> tab to patch)")
     p_pdt.set_defaults(func=cmd_program_patch_default_team_cf)
+
+    p_psd = p_program_sub.add_parser(
+        "patch-status-dropdown",
+        help="re-apply the Status column dropdown so existing tabs pick up new Status values",
+    )
+    p_psd.add_argument("name", help="program short name (the P_<name> tab to patch)")
+    p_psd.set_defaults(func=cmd_program_patch_status_dropdown)
 
     # ---------- task add / update / delete ----------
 

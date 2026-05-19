@@ -15,7 +15,8 @@ def compute_status(task: Task, tasks_by_id: dict[str, Task], today: date) -> str
     """Return the auto-derived Status for `task`.
 
     Rules (in order; first match wins):
-      0. status == Cancelled            → Cancelled (terminal; preserved)
+      0a. status == Cancelled           → Cancelled (terminal; preserved)
+      0b. status == Planned AND pct==0  → Planned (preserve user intent)
       1. %complete == 100               → Done
       2. %complete == 0                 → Not Started
       3. start has passed AND any predecessor < 100% complete → Blocked
@@ -23,10 +24,16 @@ def compute_status(task: Task, tasks_by_id: dict[str, Task], today: date) -> str
 
     Cancelled is a terminal state for tasks that came in from Linear as
     canceled-type (or were manually marked Cancelled in the workbook).
-    Without the rule-0 carve-out, auto_status would rewrite Cancelled
+    Without the rule-0a carve-out, auto_status would rewrite Cancelled
     to Not Started whenever %complete is 0, which on the next Linear
     sync would push that "Not Started" back to Linear and un-archive
     the issue.
+
+    Planned is a user-set flag meaning "queued / next-up, not just
+    backlog." Without the rule-0b carve-out, rule 2 would silently
+    overwrite Planned with Not Started whenever pct=0 (which is most
+    of Planned's lifetime — once work starts, pct goes above 0 and the
+    cascade naturally moves to In Progress).
 
     "At Risk" is not auto-derived. If `task.status` was manually set to
     At Risk and no rule above triggers a different status, this function
@@ -35,6 +42,8 @@ def compute_status(task: Task, tasks_by_id: dict[str, Task], today: date) -> str
     """
     if task.status == Status.CANCELLED:
         return Status.CANCELLED
+    if task.status == Status.PLANNED and task.percent_complete <= 0:
+        return Status.PLANNED
 
     pct = task.percent_complete
     if pct >= 100:

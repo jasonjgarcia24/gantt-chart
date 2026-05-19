@@ -839,3 +839,126 @@ def test_non_ms_update_still_routes_to_save_issue():
     assert reqs[0].tool == SAVE_ISSUE_TOOL
     assert reqs[0].kwargs == {"id": "IBO-5", "dueDate": "2026-06-15"}
 
+
+# --- workbook state → Linear state translation -------------------------------
+
+
+def _state_push_row(workbook_state: str) -> SyncRowDiff:
+    """A row that pushes only the state field, holding all snapshot/Linear
+    values constant so the only field_change is the state push."""
+    return _mk_update_row(
+        field_changes=[
+            _fc("state", workbook_state, "Not Started", "Not Started",
+                FieldClassification.PUSH, workbook_state, "workbook"),
+        ],
+    )
+
+
+def _push_with_task(
+    workbook_state: str,
+    *,
+    task_start=None,
+    today=None,
+):
+    """Build_push_requests with a single state-push row and the task
+    threaded through (so the date-conditional At Risk path can resolve)."""
+    from datetime import date as _date
+    from gantt_lib.cp.contracts import (
+        CpInput, CpInputConfig, CpInputProject, CpInputIssue,
+    )
+    row = _state_push_row(workbook_state)
+    task = Task(
+        id=row.wbs_id, level=1, name=row.title, duration=1,
+        start=task_start, status=workbook_state,
+    )
+    payload = CpInput(
+        project=CpInputProject(name="TEST", source="linear"),
+        config=CpInputConfig(
+            default_duration_days=1,
+            today=today or _date(2026, 5, 19),
+        ),
+        issues=[CpInputIssue(linear_id=row.linear_id, title=row.title)],
+        edges=[],
+    )
+    diff = SyncDiff(program="TEST", rows=[row])
+    return build_push_requests(
+        diff,
+        workbook_tasks_by_wbs={row.wbs_id: task},
+        linear_team="T", linear_project="P", linear_archive_state="Canceled",
+        workbook_tasks=[task], payload=payload, existing_links=[],
+    )
+
+
+def test_state_push_not_started_translates_to_backlog():
+    reqs = _push_with_task("Not Started")
+    assert reqs[0].kwargs["state"] == "Backlog"
+
+
+def test_state_push_planned_translates_to_todo():
+    reqs = _push_with_task("Planned")
+    assert reqs[0].kwargs["state"] == "Todo"
+
+
+def test_state_push_blocked_translates_to_in_progress():
+    """Linear has no Blocked state — surface as active so consumers see
+    the work moving (and the workbook keeps the Blocked flag locally)."""
+    reqs = _push_with_task("Blocked")
+    assert reqs[0].kwargs["state"] == "In Progress"
+
+
+def test_state_push_in_progress_translates_to_in_progress():
+    reqs = _push_with_task("In Progress")
+    assert reqs[0].kwargs["state"] == "In Progress"
+
+
+def test_state_push_done_translates_to_done():
+    reqs = _push_with_task("Done")
+    assert reqs[0].kwargs["state"] == "Done"
+
+
+def test_state_push_cancelled_translates_to_canceled_american_spelling():
+    """Workbook uses British 'Cancelled'; Linear uses American 'Canceled'."""
+    reqs = _push_with_task("Cancelled")
+    assert reqs[0].kwargs["state"] == "Canceled"
+
+
+def test_state_push_at_risk_with_past_start_translates_to_in_progress():
+    """At Risk + task has started (start ≤ today) → In Progress in Linear."""
+    from datetime import date
+    reqs = _push_with_task(
+        "At Risk",
+        task_start=date(2026, 5, 10),
+        today=date(2026, 5, 19),
+    )
+    assert reqs[0].kwargs["state"] == "In Progress"
+
+
+def test_state_push_at_risk_with_today_start_translates_to_in_progress():
+    """Boundary: start == today counts as started → In Progress."""
+    from datetime import date
+    reqs = _push_with_task(
+        "At Risk",
+        task_start=date(2026, 5, 19),
+        today=date(2026, 5, 19),
+    )
+    assert reqs[0].kwargs["state"] == "In Progress"
+
+
+def test_state_push_at_risk_with_future_start_translates_to_backlog():
+    """At Risk + task hasn't started yet → Backlog (queued, risk is
+    workbook-local until work actually begins)."""
+    from datetime import date
+    reqs = _push_with_task(
+        "At Risk",
+        task_start=date(2026, 6, 1),
+        today=date(2026, 5, 19),
+    )
+    assert reqs[0].kwargs["state"] == "Backlog"
+
+
+def test_state_push_at_risk_with_no_start_defaults_to_backlog():
+    """No start anchor known → conservative default: Backlog. Task can't
+    be 'In Progress' if we don't know it's started."""
+    reqs = _push_with_task("At Risk", task_start=None)
+    assert reqs[0].kwargs["state"] == "Backlog"
+

@@ -46,6 +46,50 @@ SAVE_ISSUE_TOOL = "mcp__claude_ai_Linear__save_issue"
 SAVE_MILESTONE_TOOL = "mcp__claude_ai_Linear__save_milestone"
 
 
+# Workbook Status → Linear state name (workspace-default Linear state names).
+# Set by the user-defined mapping in CLAUDE.md: workbook semantics are
+# richer than Linear's, so several workbook statuses collapse onto Linear
+# "In Progress" or "Backlog". The reverse (pull-side) map lives in the
+# agent's normalization recipe in SKILL.md — pull is naturally lossy.
+#
+# "At Risk" is handled separately by `_translate_state_to_linear` because
+# it's date-conditional (In Progress if started, else Backlog).
+WORKBOOK_TO_LINEAR_STATE: dict[str, str] = {
+    "Not Started": "Backlog",
+    "Planned": "Todo",
+    "In Progress": "In Progress",
+    "Blocked": "In Progress",  # Linear has no Blocked state — surface as active
+    "Done": "Done",
+    "Cancelled": "Canceled",   # workbook uses British spelling; Linear American
+}
+
+
+def _translate_state_to_linear(
+    workbook_state: str,
+    *,
+    task_start: Optional[Any] = None,
+    today: Optional[Any] = None,
+) -> str:
+    """Translate a workbook Status value to a Linear state name.
+
+    Most rows go through `WORKBOOK_TO_LINEAR_STATE`. `At Risk` is the
+    one date-conditional case:
+    - If the task has started (`start <= today`), surface as "In Progress"
+      so consumers see it as active work that's flagging risk.
+    - Otherwise, surface as "Backlog" — it's still queued; the risk
+      flag is a workbook concern.
+
+    Unknown workbook states fall through unchanged, defensively — better
+    to send an unmapped value (and trigger Linear's silent no-op than to
+    crash on a state we haven't seen yet).
+    """
+    if workbook_state == "At Risk":
+        if task_start is not None and today is not None and task_start <= today:
+            return "In Progress"
+        return "Backlog"
+    return WORKBOOK_TO_LINEAR_STATE.get(workbook_state, workbook_state)
+
+
 @dataclass(frozen=True)
 class MCPRequest:
     """One Linear MCP call to dispatch from the agent.
@@ -106,6 +150,8 @@ def _push_field_kwargs(
     *,
     current_labels: Optional[list[str]] = None,
     team_label_map: Optional[dict[str, str]] = None,
+    task_start: Optional[Any] = None,
+    today: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Translate the field_changes the workbook is asserting (PUSH or
     workbook-winning CONFLICT) into save_issue kwargs.
@@ -117,6 +163,10 @@ def _push_field_kwargs(
     `current_labels` and `team_label_map` are needed to build the
     replacement `labels` array when team changes (Linear's labels API
     is full-replacement, not append). Pass [] / {} when not syncing teams.
+
+    `task_start` and `today` are needed only for the date-conditional
+    "At Risk" state translation — pass None to default At Risk to
+    Backlog (treating the task as not-yet-started).
     """
     # Internal snapshot name → Linear MCP save_issue param name.
     field_to_mcp = {
@@ -189,6 +239,14 @@ def _push_field_kwargs(
                 value = raw
             else:
                 value = None  # clears the milestone link in Linear
+        elif mcp_key == "state":
+            # Translate workbook state vocabulary → Linear state name.
+            # See WORKBOOK_TO_LINEAR_STATE + _translate_state_to_linear.
+            value = _translate_state_to_linear(
+                str(value or ""),
+                task_start=task_start,
+                today=today,
+            )
         else:
             value = value or ""
         kwargs[mcp_key] = value
@@ -243,13 +301,20 @@ def _build_update_request(
     *,
     current_labels: Optional[list[str]] = None,
     team_label_map: Optional[dict[str, str]] = None,
+    task_start: Optional[Any] = None,
+    today: Optional[Any] = None,
 ) -> Optional[MCPRequest]:
     """Build the pass-1 save_issue request for an `update` row, or None
-    if no field needs pushing (everything was PULL/CONVERGED/Linear-wins)."""
+    if no field needs pushing (everything was PULL/CONVERGED/Linear-wins).
+
+    `task_start` and `today` flow through to the At Risk state translation.
+    """
     kwargs = _push_field_kwargs(
         row.field_changes,
         current_labels=current_labels,
         team_label_map=team_label_map,
+        task_start=task_start,
+        today=today,
     )
     if not kwargs:
         return None
@@ -569,10 +634,17 @@ def build_push_requests(
             else:
                 issue = issues_by_id.get(row.linear_id)
                 current_labels = list(issue.labels) if issue else []
+                # task_start + today flow through for the At Risk
+                # state translation (which is date-conditional).
+                task = workbook_tasks_by_wbs.get(row.wbs_id)
+                task_start = getattr(task, "start", None) if task else None
+                today = payload.config.today if payload is not None else None
                 req = _build_update_request(
                     row,
                     current_labels=current_labels,
                     team_label_map=team_label_map,
+                    task_start=task_start,
+                    today=today,
                 )
             if req is not None:
                 pass1.append(req)
