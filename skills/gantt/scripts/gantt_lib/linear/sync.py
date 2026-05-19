@@ -278,9 +278,19 @@ def _apply_pull_writes(
         pull_new_wbs=pull_new_wbs,
         existing_links=existing_links,
     )
-    for row in diff.rows:
-        if row.action != "pull_new":
-            continue
+    # Sort pull_new rows by WBS so sub-issues physically appear below
+    # their parent on the sheet (e.g. WBS "2.1" right after "2", before
+    # "3"). Without this, sheets.append_task writes in diff order — which
+    # follows Linear's list_issues ordering, not WBS hierarchy.
+    pull_new_rows_sorted = sorted(
+        (r for r in diff.rows if r.action == "pull_new"),
+        key=lambda r: wbs_sort_key(
+            (pull_new_tasks_by_linear.get(r.linear_id).id
+             if pull_new_tasks_by_linear.get(r.linear_id) is not None
+             else pull_new_wbs.get(r.linear_id, "zzz"))
+        ),
+    )
+    for row in pull_new_rows_sorted:
         issue = issue_by_linear.get(row.linear_id)
         if issue is None:
             continue
