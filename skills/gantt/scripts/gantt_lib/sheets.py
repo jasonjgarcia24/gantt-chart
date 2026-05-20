@@ -442,6 +442,52 @@ def apply_milestone_row_grey_out_cf(ss, program_name: str) -> None:
     })
 
 
+def apply_unresolved_owner_marker_cf(ss, program_name: str) -> None:
+    """Apply the unresolved-owner CF marker to a program tab. Owner cells
+    whose value didn't resolve to a Linear workspace user (per the last
+    sync's `sidecar_owner_resolved` flag in `_LinearSync`) get italicized
+    + dim-grey text.
+
+    Idempotent: deletes any pre-existing CF rule whose trigger formula
+    looks like our marker (contains the literal `sidecar_owner_resolved`
+    lookup pattern) before adding the fresh rule. Lets re-runs replace
+    older versions cleanly when the rule shape evolves.
+
+    Requires v2 program-tab schema and the v4 `_LinearSync` schema
+    (which has `sidecar_owner_resolved` at col T). Run
+    `gantt linear-sync` once first to auto-migrate `_LinearSync` to v4,
+    or this CF rule will silently never fire (VLOOKUP returns #N/A on
+    every row → IFERROR returns FALSE → no formatting applied).
+    """
+    tab_name = schema.program_tab_name(program_name)
+    try:
+        ws = ss.worksheet(tab_name)
+    except Exception as e:
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} not found (tab {tab_name!r})"
+        ) from e
+
+    header_row = ws.get_values("A4:O4")
+    header_cells = header_row[0] if header_row else []
+    version = schema.detect_program_tab_schema(header_cells)
+    if version != "v2":
+        raise schema.ProgramTabSchemaError(
+            f"program {program_name!r} is on {version!r} schema; the "
+            "unresolved-owner CF references col D (Owner) which exists on "
+            f"both v1 and v2 but assumes v2 layout. Run `gantt program "
+            f"migrate-schema {program_name}` first."
+        )
+
+    # Match-by-formula identifier — every variant of this rule uses
+    # this lookup column, so the substring is reliable for dedupe.
+    _delete_cf_rules_matching_formula(ss, ws, "_LinearSync!$T:$T")
+    ss.batch_update({
+        "requests": [
+            schema.unresolved_owner_marker_cf_request(ws.id, program_name),
+        ],
+    })
+
+
 def apply_status_dropdown(ss, program_name: str) -> None:
     """Re-apply the Status column data-validation dropdown on an
     existing program tab. Idempotent: setDataValidation replaces any

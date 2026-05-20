@@ -417,6 +417,58 @@ def test_milestone_row_grey_out_cf_targets_all_non_milestone_fields():
         assert r["endColumnIndex"] == r["startColumnIndex"] + 1
 
 
+def test_unresolved_owner_marker_cf_targets_owner_column_only():
+    """The marker only touches col D (Owner). Other columns are
+    untouched — this CF doesn't grey-out a whole row."""
+    from gantt_lib.schema import (
+        COL_OWNER_IDX, unresolved_owner_marker_cf_request,
+    )
+    req = unresolved_owner_marker_cf_request(sheet_id=42, program_name="TPM90")
+    rule = req["addConditionalFormatRule"]["rule"]
+    ranges = rule["ranges"]
+    assert len(ranges) == 1
+    assert ranges[0]["startColumnIndex"] == COL_OWNER_IDX
+    assert ranges[0]["endColumnIndex"] == COL_OWNER_IDX + 1
+
+
+def test_unresolved_owner_marker_cf_uses_italic_dim_text():
+    """The format is italic + dim grey foreground — visually distinct
+    from the existing grey-out background CFs (which set backgroundColor,
+    not textFormat). Signals 'this won't sync' without overwhelming."""
+    from gantt_lib.schema import unresolved_owner_marker_cf_request
+    req = unresolved_owner_marker_cf_request(sheet_id=42, program_name="TPM90")
+    fmt = req["addConditionalFormatRule"]["rule"]["booleanRule"]["format"]
+    assert fmt["textFormat"]["italic"] is True
+    fg = fmt["textFormat"]["foregroundColor"]
+    # Dim grey: each channel ~0.55, much darker than weekend grey (~0.93).
+    assert fg["red"] == fg["green"] == fg["blue"]
+    assert 0.4 < fg["red"] < 0.7
+
+
+def test_unresolved_owner_marker_cf_bakes_program_name_into_formula():
+    """Per-tab CF — the program name is embedded so the _LinearSync
+    lookup doesn't accidentally match the same WBS id in another
+    program's rows."""
+    from gantt_lib.schema import unresolved_owner_marker_cf_request
+    req = unresolved_owner_marker_cf_request(sheet_id=42, program_name="TPM90")
+    formula = req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    assert '"TPM90"' in formula  # quoted in the formula
+    assert "_LinearSync!$T:$T" in formula  # the sidecar_owner_resolved column
+    assert "_LinearSync!$A:$A" in formula  # program filter
+    assert "_LinearSync!$B:$B" in formula  # WBS lookup
+    assert "$D" in formula                  # Owner column blank check
+
+
+def test_unresolved_owner_marker_cf_fires_only_on_FALSE():
+    """The formula compares the sidecar value against the literal string
+    'FALSE'. Empty values ("", from blank-owner rows or pre-PR-H rows)
+    don't trigger the marker — only confirmed unresolved values do."""
+    from gantt_lib.schema import unresolved_owner_marker_cf_request
+    req = unresolved_owner_marker_cf_request(sheet_id=42, program_name="TPM90")
+    formula = req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    assert '="FALSE"' in formula
+
+
 def test_milestone_row_grey_out_cf_leaves_predecessors_editable():
     """Predecessors (col K) is the milestone-membership editor — must
     NOT be greyed even though milestones don't have blockedBy in Linear.

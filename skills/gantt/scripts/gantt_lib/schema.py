@@ -583,6 +583,68 @@ def linked_workbook_only_grey_out_cf_request(
     }
 
 
+UNRESOLVED_OWNER_TEXT_COLOR = {"red": 0.55, "green": 0.55, "blue": 0.55}
+
+
+def unresolved_owner_marker_cf_request(sheet_id: int, program_name: str) -> dict:
+    """Conditional formatting: italicize + dim the text color on Owner
+    cells (col D) where the workbook value didn't resolve to a Linear
+    workspace user during the last sync.
+
+    Drives off the `sidecar_owner_resolved` column in `_LinearSync`
+    (PR-H). The formula uses INDEX/MATCH to find the row for the
+    current WBS *within this program* (filtering by program prevents
+    same-WBS collisions across multiple programs) and checks the flag.
+
+    Cell text becomes italic + grey when:
+      1. The Owner cell is not blank
+      2. The row's WBS has a matching row in `_LinearSync` for this program
+      3. That row's `sidecar_owner_resolved` is exactly "FALSE"
+
+    Rows without an Owner value, unlinked rows (no SyncLink), and
+    resolved rows ("TRUE") all bypass the formatting. Empty
+    `sidecar_owner_resolved` ("") also bypasses — that's the "validation
+    disabled" or "Owner blank at last sync" case.
+
+    `program_name` is baked into the formula at apply time so the
+    per-tab CF correctly scopes lookups.
+    """
+    formula = (
+        f"=AND("
+        f"NOT(ISBLANK($D{FIRST_TASK_ROW})), "
+        f'IFERROR(INDEX(_LinearSync!$T:$T, MATCH(1, '
+        f'(_LinearSync!$A:$A="{program_name}")*'
+        f"(_LinearSync!$B:$B=$A{FIRST_TASK_ROW}), 0))=\"FALSE\", FALSE)"
+        f")"
+    )
+    return {
+        "addConditionalFormatRule": {
+            "rule": {
+                "ranges": [{
+                    "sheetId": sheet_id,
+                    "startRowIndex": HEADER_ROWS,
+                    "endRowIndex": _max_data_row(),
+                    "startColumnIndex": COL_OWNER_IDX,
+                    "endColumnIndex": COL_OWNER_IDX + 1,
+                }],
+                "booleanRule": {
+                    "condition": {
+                        "type": "CUSTOM_FORMULA",
+                        "values": [{"userEnteredValue": formula}],
+                    },
+                    "format": {
+                        "textFormat": {
+                            "italic": True,
+                            "foregroundColor": UNRESOLVED_OWNER_TEXT_COLOR,
+                        },
+                    },
+                },
+            },
+            "index": 0,
+        }
+    }
+
+
 def boundary_border_request(sheet_id: int, start_col_idx: int,
                              end_col_idx_exclusive: int, total_rows: int,
                              weight: str = "month") -> dict:

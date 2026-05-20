@@ -74,13 +74,21 @@ PHASE2_HEADERS = PHASE1_HEADERS + [
     "snapshot_milestone",
 ]
 
-# Current (Phase-2.1) headers — adds snapshot_team to support team↔labels sync.
-SYNC_HEADERS = PHASE2_HEADERS + [
+# Phase-2.1 headers — added snapshot_team for team↔labels sync. Kept as
+# a constant so v3→v4 migration can detect 19-col tabs unambiguously.
+PHASE3_HEADERS = PHASE2_HEADERS + [
     "snapshot_team",
 ]
 
-_N_COLS = len(SYNC_HEADERS)  # 19
-_LAST_COL_LETTER = schema.col_letter(_N_COLS)  # "S"
+# Current (Phase-2.2) headers — adds sidecar_owner_resolved so the
+# program-tab CF marker can italicize Owner cells whose value didn't
+# resolve to a Linear workspace user (PR-H).
+SYNC_HEADERS = PHASE3_HEADERS + [
+    "sidecar_owner_resolved",
+]
+
+_N_COLS = len(SYNC_HEADERS)  # 20
+_LAST_COL_LETTER = schema.col_letter(_N_COLS)  # "T"
 _DATA_FIRST_ROW = 3  # row 1 = headers, row 2 = warning, row 3+ = data
 
 SYNC_WARNING_ROW = [
@@ -119,6 +127,11 @@ class SyncLink:
     snapshot_parent: str = ""
     snapshot_milestone: str = ""
     snapshot_team: str = ""
+    # "TRUE" / "FALSE" / "" — whether the workbook Owner value resolved
+    # to a Linear workspace user during the last sync. Empty when the
+    # Owner cell was blank or assignee validation was disabled. Drives
+    # the program-tab CF marker that italicizes unresolved Owner cells.
+    sidecar_owner_resolved: str = ""
 
 
 # Tuple of dataclass field names in column order. Built once so
@@ -163,9 +176,12 @@ def _read_header_row(ws) -> list[str]:
 
 
 def _detect_schema_version(header_row: list[str]) -> str:
-    """Return 'v3' for the current schema, 'v2' for Phase 2 (18-col),
-    'v1' for Phase 1 (5-col), or 'unknown'."""
+    """Return 'v4' for the current schema, 'v3' for Phase-2.1 (19-col,
+    snapshot_team), 'v2' for Phase-2 (18-col), 'v1' for Phase-1 (5-col),
+    or 'unknown'."""
     if header_row == SYNC_HEADERS:
+        return "v4"
+    if header_row == PHASE3_HEADERS:
         return "v3"
     if header_row == PHASE2_HEADERS:
         return "v2"
@@ -206,14 +222,19 @@ def ensure_sync_tab(ss):
     if ws is not None:
         header = _read_header_row(ws)
         version = _detect_schema_version(header)
+        if version == "v4":
+            return ws
         if version == "v3":
+            _migrate_v3_to_v4(ss, ws)
             return ws
         if version == "v2":
             _migrate_v2_to_v3(ss, ws)
+            _migrate_v3_to_v4(ss, ws)
             return ws
         if version == "v1":
             _migrate_v1_to_v2(ss, ws)
             _migrate_v2_to_v3(ss, ws)
+            _migrate_v3_to_v4(ss, ws)
             return ws
         # Empty (rare race) or unknown — raise to surface to caller.
         if header:
@@ -261,13 +282,18 @@ def migrate_sync_tab(ss) -> int:
 
     header = _read_header_row(ws)
     version = _detect_schema_version(header)
-    if version == "v3":
+    if version == "v4":
         return 0
+    if version == "v3":
+        return _migrate_v3_to_v4(ss, ws)
     if version == "v2":
-        return _migrate_v2_to_v3(ss, ws)
+        count = _migrate_v2_to_v3(ss, ws)
+        _migrate_v3_to_v4(ss, ws)
+        return count
     if version == "v1":
         count = _migrate_v1_to_v2(ss, ws)
         _migrate_v2_to_v3(ss, ws)
+        _migrate_v3_to_v4(ss, ws)
         return count
     raise SyncTabSchemaError(
         f"`_LinearSync` tab header row {header!r} does not match "
@@ -311,6 +337,45 @@ def _migrate_v1_to_v2(ss, ws) -> int:
     # hidden, WBS col TEXT) — safe to re-issue; idempotent on Sheets side.
     ss.batch_update({"requests": _format_requests(ws.id)})
 
+    return data_count
+
+
+def _migrate_v3_to_v4(ss, ws) -> int:
+    """Append the `sidecar_owner_resolved` column (col T) to a 19-col
+    Phase-2.1 tab in place. Returns the data-row count seen.
+
+    The new column defaults to "" — the next sync's push pass will
+    populate "TRUE" / "FALSE" per linked row based on the assignee
+    resolver's outcome (PR-H). Empty means "no Owner cell value to
+    check" or "validation disabled this sync."
+    """
+    # Capture existing 19-col data rows so we can pad to 20.
+    existing = ws.get_values(f"A{_DATA_FIRST_ROW}:{schema.col_letter(len(PHASE3_HEADERS))}")
+    data_count = sum(
+        1 for row in existing
+        if _row_to_link(row + [""] * (_N_COLS - len(row))) is not None
+    )
+
+    # Rewrite headers + warning row to the current 20-col shape.
+    ws.update(
+        range_name=f"A1:{_LAST_COL_LETTER}2",
+        values=[SYNC_HEADERS, SYNC_WARNING_ROW],
+        value_input_option="USER_ENTERED",
+    )
+
+    # Pad each existing data row with one extra empty cell (sidecar_owner_resolved).
+    if existing:
+        padded: list[list[str]] = []
+        for row in existing:
+            cells = list(row) + [""] * (_N_COLS - len(row))
+            padded.append(cells[:_N_COLS])
+        ws.update(
+            range_name=f"A{_DATA_FIRST_ROW}",
+            values=padded,
+            value_input_option="USER_ENTERED",
+        )
+
+    ss.batch_update({"requests": _format_requests(ws.id)})
     return data_count
 
 

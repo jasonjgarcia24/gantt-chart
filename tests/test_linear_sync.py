@@ -28,6 +28,7 @@ from gantt_lib.linear.sync import (
     _assign_wbs_for_pull_new,
     _augment_milestone_predecessors_from_linear,
     _augment_predecessors_from_linear,
+    _build_owner_suggestions,
     _build_pull_new_tasks,
     sync,
 )
@@ -745,3 +746,176 @@ def test_build_pull_new_tasks_returns_empty_when_no_pull_new():
         payload=payload, pull_new_wbs={}, existing_links=[],
     )
     assert out == {}
+
+
+# --- _build_owner_suggestions (PR-H part 1) ---------------------------------
+
+
+_USERS_PH = [
+    {"id": "u-1", "email": "alex@example.com", "name": "Alex Lee"},
+    {"id": "u-2", "email": "jane@example.com", "name": "Jane Park"},
+]
+
+
+def _unresolved(wbs_id: str, workbook_value: str) -> dict:
+    return {
+        "wbs_id": wbs_id,
+        "field": "assignee",
+        "workbook_value": workbook_value,
+        "reason": "no matching Linear workspace user",
+    }
+
+
+def test_owner_suggestions_invite_for_chip_email_not_in_workspace():
+    """Unresolved value looks like an email (chip-extracted) but isn't a
+    workspace user → emit a guest_invite suggestion."""
+    out = _build_owner_suggestions(
+        unresolved=[_unresolved("1", "bob@example.com")],
+        linear_users=_USERS_PH,
+    )
+    assert len(out) == 1
+    assert out[0]["type"] == "guest_invite"
+    assert out[0]["email"] == "bob@example.com"
+    assert out[0]["count"] == 1
+    assert "linear.app/settings/members" in out[0]["message"]
+
+
+def test_owner_suggestions_dedupes_and_counts_repeated_emails():
+    """Same chip email appears on multiple rows → one suggestion with
+    a count, not three separate ones."""
+    out = _build_owner_suggestions(
+        unresolved=[
+            _unresolved("1", "bob@example.com"),
+            _unresolved("2", "bob@example.com"),
+            _unresolved("3", "bob@example.com"),
+        ],
+        linear_users=_USERS_PH,
+    )
+    assert len(out) == 1
+    assert out[0]["email"] == "bob@example.com"
+    assert out[0]["count"] == 3
+    assert "appears as Owner on 3 task" in out[0]["message"]
+
+
+def test_owner_suggestions_singular_message_for_count_one():
+    out = _build_owner_suggestions(
+        unresolved=[_unresolved("1", "bob@example.com")],
+        linear_users=_USERS_PH,
+    )
+    assert "1 task" in out[0]["message"]
+    assert "1 tasks" not in out[0]["message"]
+
+
+def test_owner_suggestions_skips_plain_text_names():
+    """Workbook value without `@` (e.g. 'Jon', 'Eng lead') → no suggestion
+    because there's no email to invite. Stays in unresolved list for
+    visibility but not actionable."""
+    out = _build_owner_suggestions(
+        unresolved=[
+            _unresolved("1", "Jon"),
+            _unresolved("2", "Eng lead"),
+            _unresolved("3", "Zach"),
+        ],
+        linear_users=_USERS_PH,
+    )
+    assert out == []
+
+
+def test_owner_suggestions_mixed_emails_and_plain_text():
+    """Mix of resolvable scenarios → only the email entries become
+    suggestions; plain-text names are silently ignored."""
+    out = _build_owner_suggestions(
+        unresolved=[
+            _unresolved("1", "bob@example.com"),
+            _unresolved("2", "Jon"),
+            _unresolved("3", "carol@example.com"),
+            _unresolved("4", "Zach"),
+            _unresolved("5", "carol@example.com"),
+        ],
+        linear_users=_USERS_PH,
+    )
+    assert len(out) == 2
+    emails = {s["email"]: s["count"] for s in out}
+    assert emails == {"bob@example.com": 1, "carol@example.com": 2}
+
+
+def test_owner_suggestions_defensively_skips_workspace_users():
+    """A workspace user shouldn't appear in unresolved at all (the
+    resolver would have matched it), but if it does (e.g. a bug in
+    case-handling), don't emit a duplicate-invite suggestion for
+    someone already in the workspace."""
+    out = _build_owner_suggestions(
+        unresolved=[_unresolved("1", "alex@example.com")],  # workspace user
+        linear_users=_USERS_PH,
+    )
+    assert out == []
+
+
+def test_owner_suggestions_empty_input_returns_empty_list():
+    assert _build_owner_suggestions(unresolved=[], linear_users=_USERS_PH) == []
+
+
+def test_owner_suggestions_handles_empty_users_list():
+    """No workspace users known (e.g. linear_users not configured) — still
+    emit suggestions for the chip-extracted emails since none can match."""
+    out = _build_owner_suggestions(
+        unresolved=[_unresolved("1", "bob@example.com")],
+        linear_users=[],
+    )
+    assert len(out) == 1
+    assert out[0]["email"] == "bob@example.com"
+
+
+def test_sidecar_owner_resolved_set_to_TRUE_when_resolver_matches():
+    """`_sidecar_from_task` writes "TRUE" to sidecar_owner_resolved
+    when the workbook Owner resolves to a workspace user."""
+    from gantt_lib.linear.sync import _sidecar_from_task
+    task = Task(
+        id="1", level=1, name="X", duration=1, owner="alex@example.com",
+    )
+    sidecar = _sidecar_from_task(task, linear_users=_USERS_PH)
+    assert sidecar["sidecar_owner_resolved"] == "TRUE"
+
+
+def test_sidecar_owner_resolved_set_to_FALSE_when_resolver_misses():
+    """Unmatched Owner → "FALSE". This is what the CF marker reads to
+    italicize the cell."""
+    from gantt_lib.linear.sync import _sidecar_from_task
+    task = Task(
+        id="1", level=1, name="X", duration=1, owner="Jon",
+    )
+    sidecar = _sidecar_from_task(task, linear_users=_USERS_PH)
+    assert sidecar["sidecar_owner_resolved"] == "FALSE"
+
+
+def test_sidecar_owner_resolved_empty_when_owner_blank():
+    """Blank Owner → "" (not FALSE). The CF formula compares against
+    "FALSE" literal — empty values bypass the marker."""
+    from gantt_lib.linear.sync import _sidecar_from_task
+    task = Task(id="1", level=1, name="X", duration=1, owner="")
+    sidecar = _sidecar_from_task(task, linear_users=_USERS_PH)
+    assert sidecar["sidecar_owner_resolved"] == ""
+
+
+def test_sidecar_owner_resolved_empty_when_validation_disabled():
+    """Caller didn't pass linear_users → "" (validation off, don't
+    speculate). Useful for sync runs where the agent hasn't supplied
+    a user list."""
+    from gantt_lib.linear.sync import _sidecar_from_task
+    task = Task(id="1", level=1, name="X", duration=1, owner="Jon")
+    sidecar = _sidecar_from_task(task, linear_users=None)
+    assert sidecar["sidecar_owner_resolved"] == ""
+
+
+def test_owner_suggestions_skips_non_assignee_entries():
+    """Defensive: only assignee-field unresolved entries become invite
+    suggestions. Other future field types (if added) shouldn't trigger
+    this code path."""
+    out = _build_owner_suggestions(
+        unresolved=[{
+            "wbs_id": "1", "field": "team",
+            "workbook_value": "bob@example.com", "reason": "n/a",
+        }],
+        linear_users=_USERS_PH,
+    )
+    assert out == []

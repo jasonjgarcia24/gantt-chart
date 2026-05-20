@@ -535,6 +535,23 @@ def cmd_program_patch_default_team_cf(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_program_patch_owner_marker_cf(args: argparse.Namespace) -> int:
+    """Apply the unresolved-Owner CF marker on an existing program tab.
+    Owner cells whose workbook value didn't resolve to a Linear workspace
+    user (per the last sync's `_LinearSync.sidecar_owner_resolved` flag)
+    render in italic dim grey to signal "this won't sync to Linear." (PR-H)"""
+    from gantt_lib import schema, sheets
+
+    ss = _open_workbook()
+    try:
+        sheets.apply_unresolved_owner_marker_cf(ss, args.name)
+    except schema.ProgramTabSchemaError as e:
+        die(str(e))
+
+    ok(f"program {args.name} patch-owner-marker-cf — unresolved-owner CF rule added")
+    return 0
+
+
 def cmd_program_patch_status_dropdown(args: argparse.Namespace) -> int:
     """Re-apply the Status column data-validation dropdown on an existing
     program tab. Use after Status enum changes (e.g. adding `Planned`)
@@ -1237,6 +1254,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_psd.add_argument("name", help="program short name (the P_<name> tab to patch)")
     p_psd.set_defaults(func=cmd_program_patch_status_dropdown)
+
+    p_pom = p_program_sub.add_parser(
+        "patch-owner-marker-cf",
+        help="add the italic/dim-grey CF marker for Owner cells that don't resolve to a Linear user",
+    )
+    p_pom.add_argument("name", help="program short name (the P_<name> tab to patch)")
+    p_pom.set_defaults(func=cmd_program_patch_owner_marker_cf)
 
     # ---------- task add / update / delete ----------
 

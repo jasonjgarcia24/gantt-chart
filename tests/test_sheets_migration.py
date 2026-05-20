@@ -259,6 +259,64 @@ def test_apply_milestone_row_grey_out_cf_idempotent_replaces_existing_rule():
     assert len(matching) == 1
 
 
+def test_apply_unresolved_owner_marker_cf_adds_marker_rule():
+    """Patch path: an unresolved-owner CF rule is added targeting Owner
+    (col D), formula references _LinearSync!$T:$T (sidecar_owner_resolved
+    lookup), program name baked in."""
+    from gantt_lib.sheets import apply_unresolved_owner_marker_cf
+    ss = FakeSpreadsheet()
+    _seed_v2_tab(ss)
+    apply_unresolved_owner_marker_cf(ss, "TPM90")
+
+    cf_bodies = [
+        b for b in ss.batch_updates
+        if any("addConditionalFormatRule" in req for req in b.get("requests", []))
+    ]
+    assert len(cf_bodies) == 1
+    rule = cf_bodies[0]["requests"][0]["addConditionalFormatRule"]["rule"]
+    col_starts = [r["startColumnIndex"] for r in rule["ranges"]]
+    assert col_starts == [schema.COL_OWNER_IDX]
+    formula = rule["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    assert "_LinearSync!$T:$T" in formula
+    assert '"TPM90"' in formula
+
+
+def test_apply_unresolved_owner_marker_cf_idempotent_replaces():
+    """Re-running deletes the prior owner-marker rule (matched by the
+    _LinearSync!$T:$T lookup substring) before adding the fresh one."""
+    from gantt_lib.sheets import apply_unresolved_owner_marker_cf
+    ss = FakeSpreadsheet()
+    _seed_v2_tab(ss)
+    apply_unresolved_owner_marker_cf(ss, "TPM90")
+    apply_unresolved_owner_marker_cf(ss, "TPM90")
+    metadata = ss.fetch_sheet_metadata()
+    ws = ss.worksheet(schema.program_tab_name("TPM90"))
+    target = next(s for s in metadata["sheets"] if s["properties"]["sheetId"] == ws.id)
+    cf_rules = target["conditionalFormats"]
+    matching = [
+        r for r in cf_rules
+        if r.get("booleanRule", {}).get("condition", {}).get("type") == "CUSTOM_FORMULA"
+        and "_LinearSync!$T:$T" in r["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    ]
+    assert len(matching) == 1
+
+
+def test_apply_unresolved_owner_marker_cf_raises_on_v1_tab():
+    """v1 tabs need to migrate first (the formula assumes v2 col layout)."""
+    from gantt_lib.sheets import apply_unresolved_owner_marker_cf
+    ss = FakeSpreadsheet()
+    _seed_v1_tab(ss)
+    with pytest.raises(schema.ProgramTabSchemaError, match="migrate-schema"):
+        apply_unresolved_owner_marker_cf(ss, "TPM90")
+
+
+def test_apply_unresolved_owner_marker_cf_raises_on_missing_program():
+    from gantt_lib.sheets import apply_unresolved_owner_marker_cf
+    ss = FakeSpreadsheet()
+    with pytest.raises(schema.ProgramTabSchemaError, match="not found"):
+        apply_unresolved_owner_marker_cf(ss, "NOPE")
+
+
 def test_apply_milestone_row_grey_out_cf_raises_on_v1_tab():
     """Milestone Link column only exists on v2 — the formula would target
     a non-existent col on v1 tabs. Force caller to migrate first."""

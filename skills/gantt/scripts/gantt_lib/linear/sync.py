@@ -93,6 +93,11 @@ class SyncResult:
     # user. Push skipped the assignee field for these rows; the agent
     # may surface a guest-invite suggestion (PR-H).
     unresolved_owners: list[dict] = field(default_factory=list)
+    # Actionable suggestions the agent can render alongside the dry-run
+    # preview. Currently emitted: `guest_invite` entries for unresolved
+    # chip emails (look like real emails but aren't workspace users),
+    # deduplicated and counted. Each entry: `{type, email, count, message}`.
+    suggestions: list[dict] = field(default_factory=list)
 
 
 # ----- Direction filtering ---------------------------------------------------
@@ -220,6 +225,58 @@ def _mcp_request_to_dict(req: MCPRequest) -> dict:
         "pass_1_create_for_wbs": req.pass_1_create_for_wbs,
         "pass_1_placeholders": list(req.pass_1_placeholders),
     }
+
+
+def _build_owner_suggestions(
+    unresolved: list[dict],
+    linear_users: list[dict],
+) -> list[dict]:
+    """Turn the unresolved-owner list into agent-renderable suggestions.
+
+    Currently emits `guest_invite` suggestions: when a workbook Owner value
+    looks like a real email (contains `@`) but isn't in the workspace, it's
+    almost certainly a person-chip pointing at a Google contact the user
+    works with regularly. Suggest inviting them as a Linear guest so
+    future syncs can actually push the assignee.
+
+    Plain-text values without `@` (e.g. "Jon", "Eng lead") don't produce
+    suggestions — there's no email to invite. They stay in the
+    unresolved-owners list for visibility but don't become actionable.
+
+    Suggestions are deduplicated by email and include an occurrence count
+    so the agent can render "alex@example.com appears 3 times — invite
+    as guest?" rather than three separate prompts.
+    """
+    known_emails = {
+        (u.get("email") or "").strip().lower()
+        for u in (linear_users or [])
+        if u.get("email")
+    }
+    counts: dict[str, int] = {}
+    for entry in unresolved:
+        if entry.get("field") != "assignee":
+            continue
+        val = (entry.get("workbook_value") or "").strip()
+        if "@" not in val:
+            continue
+        if val.lower() in known_emails:
+            continue  # defensive — shouldn't be unresolved if it's a workspace user
+        counts[val] = counts.get(val, 0) + 1
+
+    suggestions: list[dict] = []
+    for email, count in sorted(counts.items()):
+        plural = "s" if count != 1 else ""
+        suggestions.append({
+            "type": "guest_invite",
+            "email": email,
+            "count": count,
+            "message": (
+                f"{email} appears as Owner on {count} task{plural} but "
+                f"isn't a Linear workspace user. Invite as guest at "
+                f"linear.app/settings/members to enable assignee sync."
+            ),
+        })
+    return suggestions
 
 
 # ----- Pull-side application -------------------------------------------------
@@ -748,6 +805,7 @@ def _compute_post_sync_links(
                     "program", "wbs_id", "linear_id", "linear_url",
                     "sidecar_predecessors", "sidecar_percent",
                     "sidecar_notes", "sidecar_team",
+                    "sidecar_owner_resolved",
                 ]},
                 last_synced=applied_at,
                 **snapshot_to_sync_fields(sync_fields_to_snapshot(link)),
@@ -764,6 +822,7 @@ def _compute_post_sync_links(
                     "program", "wbs_id", "linear_id", "linear_url",
                     "sidecar_predecessors", "sidecar_percent",
                     "sidecar_notes", "sidecar_team",
+                    "sidecar_owner_resolved",
                 ]},
                 last_synced=applied_at,
                 **snapshot_to_sync_fields(sync_fields_to_snapshot(link)),
@@ -792,7 +851,9 @@ def _compute_post_sync_links(
 
             # Sidecar refresh from workbook task (always — workbook-only fields).
             task = task_by_wbs.get(row.wbs_id)
-            sidecar_kwargs = _sidecar_from_task(task) if task else {}
+            sidecar_kwargs = _sidecar_from_task(
+                task, linear_users=payload.config.linear_users or None,
+            ) if task else {}
 
             new_links.append(SyncLink(
                 program=program,
@@ -808,10 +869,13 @@ def _compute_post_sync_links(
         if row.action == "unchanged":
             # Refresh timestamp + sidecar to current workbook; snapshot unchanged.
             task = task_by_wbs.get(row.wbs_id)
-            sidecar_kwargs = _sidecar_from_task(task) if task else {
+            sidecar_kwargs = _sidecar_from_task(
+                task, linear_users=payload.config.linear_users or None,
+            ) if task else {
                 k: getattr(link, k) for k in [
                     "sidecar_predecessors", "sidecar_percent",
                     "sidecar_notes", "sidecar_team",
+                    "sidecar_owner_resolved",
                 ]
             }
             new_links.append(SyncLink(
@@ -833,13 +897,29 @@ def _compute_post_sync_links(
     return new_links
 
 
-def _sidecar_from_task(task: Task) -> dict[str, str]:
-    """Build the sidecar_* SyncLink-kwarg dict from a workbook Task."""
+def _sidecar_from_task(
+    task: Task,
+    linear_users: Optional[list[dict]] = None,
+) -> dict[str, str]:
+    """Build the sidecar_* SyncLink-kwarg dict from a workbook Task.
+
+    `linear_users` (when provided) enables the per-row resolved flag
+    that drives the program-tab CF marker (PR-H): "TRUE" when the
+    workbook Owner resolves to a workspace user, "FALSE" when it
+    doesn't, "" when the Owner cell is blank or validation is disabled.
+    """
+    from gantt_lib.linear.push import _resolve_assignee
+    if linear_users and task.owner:
+        resolved = _resolve_assignee(task.owner, linear_users)
+        owner_flag = "TRUE" if resolved is not None else "FALSE"
+    else:
+        owner_flag = ""
     return {
         "sidecar_predecessors": task.predecessors or "",
         "sidecar_percent": str(task.percent_complete) if task.percent_complete else "",
         "sidecar_notes": task.notes or "",
         "sidecar_team": task.team or "",
+        "sidecar_owner_resolved": owner_flag,
     }
 
 
@@ -951,6 +1031,9 @@ def sync(
         )
         upsert_links(ss, program, new_links)
 
+    suggestions = _build_owner_suggestions(
+        unresolved_owners, payload.config.linear_users or [],
+    )
     return SyncResult(
         ok=True,
         program=program,
@@ -962,4 +1045,5 @@ def sync(
         mcp_requests=[_mcp_request_to_dict(r) for r in mcp_requests],
         warnings=[],
         unresolved_owners=unresolved_owners,
+        suggestions=suggestions,
     )

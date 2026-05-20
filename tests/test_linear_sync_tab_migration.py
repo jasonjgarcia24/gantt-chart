@@ -289,3 +289,90 @@ def test_migrate_v1_chains_through_to_v3():
     last_col = _last_col_letter(len(SYNC_HEADERS))
     headers = ws.get_values(f"A1:{last_col}1")[0]
     assert headers == SYNC_HEADERS  # ends at current v3 schema
+
+
+# --- v3 → v4 migration (adds sidecar_owner_resolved, PR-H) -----------------
+
+
+def _seed_phase3_tab(
+    ss: FakeSpreadsheet, *, data_rows: list[list[str]] | None = None
+) -> FakeWorksheet:
+    """Create a `_LinearSync` worksheet on `ss` with Phase-2.1 19-col
+    shape (snapshot_team but no sidecar_owner_resolved). Mimics an
+    install upgraded to Phase-2.1 before PR-H shipped."""
+    from gantt_lib.linear.sync_tab import PHASE3_HEADERS
+    ws = FakeWorksheet(SYNC_TAB, sheet_id=97)
+    warning = ["DO NOT EDIT — Phase 2.1 warning row."] + [""] * (len(PHASE3_HEADERS) - 1)
+    ws.update("A1", [PHASE3_HEADERS, warning], value_input_option="USER_ENTERED")
+    if data_rows:
+        ws.update("A3", data_rows, value_input_option="USER_ENTERED")
+    ss.add_existing_worksheet(ws)
+    return ws
+
+
+def test_migrate_v3_to_v4_appends_sidecar_owner_resolved_column():
+    """A Phase-2.1 tab (19 cols) auto-upgrades to the current 20-col
+    schema by appending `sidecar_owner_resolved`. Existing data rows are
+    preserved verbatim; the new col defaults to ""."""
+    from gantt_lib.linear.sync_tab import PHASE3_HEADERS
+    ss = FakeSpreadsheet()
+    # 19-col row with realistic values including snapshot_team.
+    row = [
+        "P1", "1", "TPM-1", "2026-05-01T00:00:00Z", "https://x/1",
+        "", "", "", "Engineering",  # sidecars (4)
+        "Build it", "In Progress", "started", "alex@x.com",
+        "2026-06-15", "5", "", "", "",  # snapshots (9, no team yet)
+        "Engineering",  # snapshot_team (col S)
+    ]
+    assert len(row) == len(PHASE3_HEADERS)
+    _seed_phase3_tab(ss, data_rows=[row])
+
+    rows_migrated = migrate_sync_tab(ss)
+    assert rows_migrated == 1
+
+    ws = ss.worksheet(SYNC_TAB)
+    last_col = _last_col_letter(len(SYNC_HEADERS))
+    headers = ws.get_values(f"A1:{last_col}1")[0]
+    assert headers == SYNC_HEADERS  # 20 cols incl. sidecar_owner_resolved
+    assert "sidecar_owner_resolved" in headers
+
+    # Data round-trips with the new col defaulting to "".
+    links = read_links(ss, "P1")
+    assert len(links) == 1
+    link = links[0]
+    assert link.snapshot_team == "Engineering"  # prior data preserved
+    assert link.sidecar_owner_resolved == ""    # new col defaults blank
+
+
+def test_migrate_v3_to_v4_is_idempotent_on_current_schema():
+    """Running migrate on the v4 schema is a no-op."""
+    ss = FakeSpreadsheet()
+    ensure_sync_tab(ss)
+    assert migrate_sync_tab(ss) == 0
+
+
+def test_ensure_auto_migrates_phase3_tab_to_v4():
+    """ensure_sync_tab on a Phase-2.1 (19-col) tab upgrades it in place."""
+    ss = FakeSpreadsheet()
+    _seed_phase3_tab(ss)
+    ws = ensure_sync_tab(ss)
+    last_col = _last_col_letter(len(SYNC_HEADERS))
+    headers = ws.get_values(f"A1:{last_col}1")[0]
+    assert headers == SYNC_HEADERS
+    assert "sidecar_owner_resolved" in headers
+
+
+def test_migrate_v1_chains_through_to_v4():
+    """Phase-1 → v4 chains all three migrations in a single call."""
+    ss = FakeSpreadsheet()
+    _seed_phase1_tab(
+        ss,
+        data_rows=[["P1", "1", "TPM-1", "2026-05-01T00:00:00Z", "https://x/1"]],
+    )
+    rows_migrated = migrate_sync_tab(ss)
+    assert rows_migrated == 1
+    ws = ss.worksheet(SYNC_TAB)
+    last_col = _last_col_letter(len(SYNC_HEADERS))
+    headers = ws.get_values(f"A1:{last_col}1")[0]
+    assert headers == SYNC_HEADERS
+    assert "sidecar_owner_resolved" in headers
