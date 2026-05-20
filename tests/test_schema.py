@@ -466,7 +466,19 @@ def test_unresolved_owner_marker_cf_fires_only_on_FALSE():
     from gantt_lib.schema import unresolved_owner_marker_cf_request
     req = unresolved_owner_marker_cf_request(sheet_id=42, program_name="TPM90")
     formula = req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
-    assert '="FALSE"' in formula
+    assert '"FALSE"' in formula
+
+
+def test_unresolved_owner_marker_cf_uses_sumproduct_not_array_math():
+    """CUSTOM_FORMULA rejects array-context formulas like INDEX/MATCH
+    with multi-array MATCH(1, A*B, 0). SUMPRODUCT evaluates the same
+    per-row product without needing array-formula context."""
+    from gantt_lib.schema import unresolved_owner_marker_cf_request
+    req = unresolved_owner_marker_cf_request(sheet_id=42, program_name="TPM90")
+    formula = req["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+    assert "SUMPRODUCT" in formula
+    assert "INDEX" not in formula
+    assert "MATCH(" not in formula
 
 
 def test_milestone_row_grey_out_cf_leaves_predecessors_editable():

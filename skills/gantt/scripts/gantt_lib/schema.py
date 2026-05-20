@@ -609,12 +609,19 @@ def unresolved_owner_marker_cf_request(sheet_id: int, program_name: str) -> dict
     `program_name` is baked into the formula at apply time so the
     per-tab CF correctly scopes lookups.
     """
+    # SUMPRODUCT > 0 evaluates the per-row truthy product over the full
+    # _LinearSync column ranges: rows where program matches AND wbs matches
+    # AND owner_resolved is exactly "FALSE" contribute 1; everything else
+    # contributes 0. Returns TRUE when ≥1 such row exists. Doesn't need
+    # array-formula context (which CUSTOM_FORMULA rejects).
     formula = (
         f"=AND("
         f"NOT(ISBLANK($D{FIRST_TASK_ROW})), "
-        f'IFERROR(INDEX(_LinearSync!$T:$T, MATCH(1, '
+        f"SUMPRODUCT("
         f'(_LinearSync!$A:$A="{program_name}")*'
-        f"(_LinearSync!$B:$B=$A{FIRST_TASK_ROW}), 0))=\"FALSE\", FALSE)"
+        f"(_LinearSync!$B:$B=$A{FIRST_TASK_ROW})*"
+        f'(_LinearSync!$T:$T="FALSE")'
+        f")>0"
         f")"
     )
     return {
