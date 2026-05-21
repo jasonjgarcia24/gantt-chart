@@ -203,7 +203,7 @@ def read_owner_chip_emails(ss, ws) -> dict[int, str]:
             ranges=[owner_range],
             fields=(
                 "sheets.data.rowData.values("
-                "chipRuns(chip(personProperties(email,displayName))),"
+                "chipRuns(chip(personProperties(email))),"
                 "formattedValue)"
             ),
         ).execute()
